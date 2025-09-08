@@ -1,0 +1,4 @@
+# Test project configuration fixture
+name: "Test Project"
+description: "A test project for integration testing"
+mode: "embedded"

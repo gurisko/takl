@@ -1,0 +1,26 @@
+[Unit]
+Description=TAKL Issue Tracker Daemon
+Documentation=https://github.com/takl/takl
+After=network.target
+
+[Service]
+Type=simple
+User=%i
+ExecStart=/usr/local/bin/takl daemon start --foreground
+ExecStop=/usr/local/bin/takl daemon stop
+Restart=on-failure
+RestartSec=5
+
+# Security settings
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.takl
+
+# Resource limits
+MemoryLimit=256M
+CPUQuota=50%
+
+[Install]
+WantedBy=default.target

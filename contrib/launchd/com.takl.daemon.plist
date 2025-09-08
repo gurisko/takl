@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.takl.daemon</string>
+    
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/takl</string>
+        <string>daemon</string>
+        <string>start</string>
+        <string>--foreground</string>
+    </array>
+    
+    <key>RunAtLoad</key>
+    <true/>
+    
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    
+    <key>StandardOutPath</key>
+    <string>/tmp/takl-daemon.log</string>
+    
+    <key>StandardErrorPath</key>
+    <string>/tmp/takl-daemon.error.log</string>
+    
+    <key>WorkingDirectory</key>
+    <string>/tmp</string>
+</dict>
+</plist>
