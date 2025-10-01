@@ -1,0 +1,379 @@
+//go:build unix
+// +build unix
+
+package daemon
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strconv"
+	"syscall"
+	"time"
+)
+
+// ensureParentDir ensures the parent directory of the given path exists with secure permissions
+func ensureParentDir(path string) error {
+	dir := filepath.Dir(path)
+
+	// Create directory with 0700 permissions (owner only)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("failed to create directory %s: %w", dir, err)
+	}
+
+	// Ensure directory has correct permissions (in case it already existed)
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return fmt.Errorf("failed to set directory permissions for %s: %w", dir, err)
+	}
+
+	return nil
+}
+
+// removeSocketIfExists removes the socket file if it exists and is actually a socket
+func removeSocketIfExists(path string) error {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	if fi.Mode()&os.ModeSocket != 0 {
+		return os.Remove(path)
+	}
+
+	return fmt.Errorf("refusing to remove non-socket path: %s", path)
+}
+
+type Daemon struct {
+	socketPath string
+	pidFile    string
+	listener   net.Listener
+	server     *http.Server
+
+	// Stats
+	startTime time.Time
+}
+
+type Config struct {
+	SocketPath string
+	PIDFile    string
+}
+
+func DefaultConfig() *Config {
+	// Prefer XDG_RUNTIME_DIR for better security and auto-cleanup
+	var baseDir string
+	if xdgDir := os.Getenv("XDG_RUNTIME_DIR"); xdgDir != "" {
+		baseDir = filepath.Join(xdgDir, "takl")
+	} else {
+		homeDir, _ := os.UserHomeDir()
+		baseDir = filepath.Join(homeDir, ".takl")
+	}
+
+	return &Config{
+		SocketPath: filepath.Join(baseDir, "daemon.sock"),
+		PIDFile:    filepath.Join(baseDir, "daemon.pid"),
+	}
+}
+
+func New(cfg *Config) (*Daemon, error) {
+	if cfg.SocketPath == "" {
+		homeDir, _ := os.UserHomeDir()
+		cfg.SocketPath = filepath.Join(homeDir, ".takl", "daemon.sock")
+	}
+
+	if cfg.PIDFile == "" {
+		homeDir, _ := os.UserHomeDir()
+		cfg.PIDFile = filepath.Join(homeDir, ".takl", "daemon.pid")
+	}
+
+	return &Daemon{
+		socketPath: cfg.SocketPath,
+		pidFile:    cfg.PIDFile,
+		startTime:  time.Now(),
+	}, nil
+}
+
+func (d *Daemon) Start() error {
+	// Check if already running
+	if d.IsRunning() {
+		pid, _ := d.readPIDFile()
+		return fmt.Errorf("daemon already running (PID: %d)", pid)
+	}
+
+	return d.startForeground()
+}
+
+func (d *Daemon) startForeground() error {
+	// Ensure parent directory exists with secure permissions
+	if err := ensureParentDir(d.socketPath); err != nil {
+		return fmt.Errorf("failed to prepare socket directory: %w", err)
+	}
+
+	// Remove any existing socket (but only if it's actually a socket)
+	if err := removeSocketIfExists(d.socketPath); err != nil {
+		return err
+	}
+
+	// Create Unix socket listener
+	listener, err := net.Listen("unix", d.socketPath)
+	if err != nil {
+		return fmt.Errorf("failed to create socket: %w", err)
+	}
+	d.listener = listener
+
+	// Set socket permissions (owner only)
+	if err := os.Chmod(d.socketPath, 0600); err != nil {
+		listener.Close()
+		return fmt.Errorf("failed to set socket permissions: %w", err)
+	}
+
+	// Write PID file
+	if err := d.writePIDFile(); err != nil {
+		listener.Close()
+		return fmt.Errorf("failed to write PID file: %w", err)
+	}
+
+	// Setup HTTP server
+	mux := http.NewServeMux()
+	d.setupRoutes(mux)
+
+	d.server = &http.Server{
+		Handler:      mux,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  60 * time.Second,
+		BaseContext:  func(net.Listener) context.Context { return context.Background() },
+	}
+
+	// Handle shutdown signals
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
+	defer signal.Stop(sigChan)
+
+	// Start server in goroutine
+	serverErr := make(chan error, 1)
+	go func() {
+		fmt.Printf("TAKL daemon started (PID: %d)\n", os.Getpid())
+		fmt.Printf("Socket: %s\n", d.socketPath)
+		serverErr <- d.server.Serve(listener)
+	}()
+
+	// Wait for signal or error
+	select {
+	case sig := <-sigChan:
+		fmt.Printf("\nReceived signal %v, shutting down...\n", sig)
+	case err := <-serverErr:
+		if err != http.ErrServerClosed {
+			fmt.Printf("Server error: %v\n", err)
+		}
+	}
+
+	// Graceful shutdown
+	d.shutdown()
+	return nil
+}
+
+func (d *Daemon) Stop() error {
+	pid, err := d.readPIDFile()
+	if err != nil {
+		return fmt.Errorf("daemon not running")
+	}
+
+	// Send SIGTERM
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return fmt.Errorf("process not found: %w", err)
+	}
+
+	if err := process.Signal(syscall.SIGTERM); err != nil {
+		return fmt.Errorf("failed to stop daemon: %w", err)
+	}
+
+	// Wait for shutdown (max 5 seconds)
+	for i := 0; i < 50; i++ {
+		if !d.IsRunning() {
+			fmt.Println("TAKL daemon stopped")
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	return fmt.Errorf("daemon did not stop gracefully")
+}
+
+func (d *Daemon) Status() (string, error) {
+	pid, err := d.readPIDFile()
+	if err != nil {
+		// No PID file
+		return fmt.Sprintf("TAKL daemon is not running\n  Socket: %s", d.socketPath), nil
+	}
+
+	// Check if process is alive
+	if !isProcessAlive(pid) {
+		// Stale PID file
+		return fmt.Sprintf("TAKL daemon is not running (stale pidfile)\n  Socket: %s", d.socketPath), nil
+	}
+
+	// Try to get health from daemon to verify identity
+	health, err := d.getHealth()
+	if err != nil {
+		// Process alive but not responding on socket
+		return fmt.Sprintf("TAKL daemon process exists (PID: %d) but not responding\n  Socket: %s\n  Error: %v",
+			pid, d.socketPath, err), nil
+	}
+
+	// Daemon is healthy and responding
+	uptime := time.Duration(health.Uptime * float64(time.Second))
+	return fmt.Sprintf("TAKL daemon running (PID: %d)\n"+
+		"  Socket: %s\n"+
+		"  Uptime: %s\n",
+		pid,
+		d.socketPath,
+		uptime.Round(time.Second)), nil
+}
+
+func (d *Daemon) IsRunning() bool {
+	pid, err := d.readPIDFile()
+	if err != nil {
+		return false
+	}
+
+	// Check if process is alive
+	if !isProcessAlive(pid) {
+		return false
+	}
+
+	// Verify daemon identity by checking if it responds on socket
+	// This protects against PID reuse
+	if _, err := d.getHealth(); err != nil {
+		return false
+	}
+
+	return true
+}
+
+func (d *Daemon) shutdown() {
+	// Shutdown server
+	if d.server != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := d.server.Shutdown(ctx); err != nil {
+			fmt.Printf("Warning: server shutdown error: %v\n", err)
+		}
+	}
+
+	// Close listener
+	if d.listener != nil {
+		d.listener.Close()
+	}
+
+	// Clean up
+	removeSocketIfExists(d.socketPath)
+	os.Remove(d.pidFile)
+}
+
+func (d *Daemon) writePIDFile() error {
+	pid := os.Getpid()
+
+	// Ensure parent directory exists
+	if err := ensureParentDir(d.pidFile); err != nil {
+		return fmt.Errorf("failed to create PID file directory: %w", err)
+	}
+
+	// Try to create PID file atomically with O_EXCL
+	f, err := os.OpenFile(d.pidFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		// If file exists, check if process is still alive
+		if os.IsExist(err) {
+			if oldPID, err2 := d.readPIDFile(); err2 == nil {
+				if isProcessAlive(oldPID) {
+					return fmt.Errorf("daemon already running (PID: %d)", oldPID)
+				}
+			}
+			// Stale PID file; remove and retry
+			if err := os.Remove(d.pidFile); err != nil {
+				return fmt.Errorf("stale pidfile exists and cannot remove: %w", err)
+			}
+			return d.writePIDFile()
+		}
+		return fmt.Errorf("failed to create PID file: %w", err)
+	}
+	defer f.Close()
+
+	_, err = f.WriteString(strconv.Itoa(pid))
+	return err
+}
+
+// isProcessAlive checks if a process with the given PID is alive
+func isProcessAlive(pid int) bool {
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	// Send signal 0 to check if process is alive
+	err = process.Signal(syscall.Signal(0))
+	return err == nil
+}
+
+func (d *Daemon) readPIDFile() (int, error) {
+	data, err := os.ReadFile(d.pidFile)
+	if err != nil {
+		return 0, err
+	}
+
+	return strconv.Atoi(string(data))
+}
+
+type HealthResponse struct {
+	Status string  `json:"status"`
+	Uptime float64 `json:"uptime"`
+}
+
+func (d *Daemon) getHealth() (*HealthResponse, error) {
+	// Use HTTP client over Unix socket with timeout
+	tr := &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var nd net.Dialer
+			return nd.DialContext(ctx, "unix", d.socketPath)
+		},
+	}
+	client := &http.Client{
+		Transport: tr,
+		Timeout:   2 * time.Second,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://unix/health", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("health returned HTTP %d", resp.StatusCode)
+	}
+
+	lr := io.LimitReader(resp.Body, 1<<20) // 1MB safety cap
+
+	var health HealthResponse
+	if err := json.NewDecoder(lr).Decode(&health); err != nil {
+		return nil, err
+	}
+
+	return &health, nil
+}

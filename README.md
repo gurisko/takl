@@ -24,3 +24,62 @@ CLI Commands → HTTP API → Daemon → Database + Files + Git
 - **Daemon**: Background service managing databases, files, and git operations
 - **Database**: Per-project SQLite with full-text search for fast queries
 - **Files**: Markdown files remain the authoritative source of truth
+
+## Daemon Management
+
+Start the daemon:
+```bash
+takl daemon start
+```
+
+Check daemon status:
+```bash
+takl daemon status
+```
+
+Stop the daemon:
+```bash
+takl daemon stop
+```
+
+The daemon uses Unix socket at `~/.takl/daemon.sock` with secure permissions (0600).
+
+## Development
+
+### Build
+
+```bash
+make build  # Build the takl binary
+```
+
+### Code Quality
+
+```bash
+make fmt    # Format code with gofmt
+make vet    # Run go vet for correctness checks
+make check  # Run fmt + vet
+```
+
+### Linting
+
+Requires [golangci-lint](https://golangci-lint.run/):
+
+```bash
+# Install golangci-lint
+go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+
+# Run linter
+make lint
+```
+
+### Testing
+
+```bash
+make test   # Run tests
+```
+
+### Full Development Workflow
+
+```bash
+make dev    # Clean, format, vet, and build
+```
