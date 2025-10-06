@@ -209,35 +209,37 @@ func (d *Daemon) Stop() error {
 	return fmt.Errorf("daemon did not stop gracefully")
 }
 
-func (d *Daemon) Status() (string, error) {
+func (d *Daemon) GetStatus() (*StatusInfo, error) {
+	info := &StatusInfo{
+		SocketPath: d.socketPath,
+	}
+
 	pid, err := d.readPIDFile()
 	if err != nil {
 		// No PID file
-		return fmt.Sprintf("TAKL daemon is not running\n  Socket: %s", d.socketPath), nil
+		return info, nil
 	}
+
+	info.PID = pid
 
 	// Check if process is alive
 	if !isProcessAlive(pid) {
 		// Stale PID file
-		return fmt.Sprintf("TAKL daemon is not running (stale pidfile)\n  Socket: %s", d.socketPath), nil
+		return info, nil
 	}
 
 	// Try to get health from daemon to verify identity
 	health, err := d.getHealth()
 	if err != nil {
 		// Process alive but not responding on socket
-		return fmt.Sprintf("TAKL daemon process exists (PID: %d) but not responding\n  Socket: %s\n  Error: %v",
-			pid, d.socketPath, err), nil
+		info.ErrorMessage = err.Error()
+		return info, nil
 	}
 
 	// Daemon is healthy and responding
-	uptime := time.Duration(health.Uptime * float64(time.Second))
-	return fmt.Sprintf("TAKL daemon running (PID: %d)\n"+
-		"  Socket: %s\n"+
-		"  Uptime: %s\n",
-		pid,
-		d.socketPath,
-		uptime.Round(time.Second)), nil
+	info.Running = true
+	info.Uptime = time.Duration(health.Uptime * float64(time.Second))
+	return info, nil
 }
 
 func (d *Daemon) IsRunning() bool {
@@ -335,6 +337,14 @@ func (d *Daemon) readPIDFile() (int, error) {
 type HealthResponse struct {
 	Status string  `json:"status"`
 	Uptime float64 `json:"uptime"`
+}
+
+type StatusInfo struct {
+	Running      bool
+	PID          int
+	SocketPath   string
+	Uptime       time.Duration
+	ErrorMessage string // For when process exists but not responding
 }
 
 func (d *Daemon) getHealth() (*HealthResponse, error) {

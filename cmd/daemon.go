@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/gurisko/takl/internal/daemon"
 	"github.com/spf13/cobra"
@@ -73,11 +74,31 @@ func statusDaemon(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to initialize daemon: %w", err)
 	}
 
-	status, err := d.Status()
+	status, err := d.GetStatus()
 	if err != nil {
 		return err
 	}
 
-	fmt.Print(status)
+	// Format for display
+	if !status.Running {
+		if status.PID > 0 {
+			if status.ErrorMessage != "" {
+				fmt.Printf("TAKL daemon process exists (PID: %d) but not responding\n", status.PID)
+				fmt.Printf("  Socket: %s\n", status.SocketPath)
+				fmt.Printf("  Error: %v\n", status.ErrorMessage)
+			} else {
+				fmt.Printf("TAKL daemon is not running (stale pidfile)\n")
+				fmt.Printf("  Socket: %s\n", status.SocketPath)
+			}
+		} else {
+			fmt.Printf("TAKL daemon is not running\n")
+			fmt.Printf("  Socket: %s\n", status.SocketPath)
+		}
+	} else {
+		fmt.Printf("TAKL daemon running (PID: %d)\n", status.PID)
+		fmt.Printf("  Socket: %s\n", status.SocketPath)
+		fmt.Printf("  Uptime: %s\n", status.Uptime.Round(time.Second))
+	}
+
 	return nil
 }
