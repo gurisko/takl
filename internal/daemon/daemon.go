@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -27,10 +28,8 @@ func ensureParentDir(path string) error {
 		return fmt.Errorf("failed to create directory %s: %w", dir, err)
 	}
 
-	// Ensure directory has correct permissions (in case it already existed)
-	if err := os.Chmod(dir, 0o700); err != nil {
-		return fmt.Errorf("failed to set directory permissions for %s: %w", dir, err)
-	}
+	// Ensure directory has correct permissions (best effort)
+	_ = os.Chmod(dir, 0o700)
 
 	return nil
 }
@@ -184,7 +183,10 @@ func (d *Daemon) startForeground() error {
 func (d *Daemon) Stop() error {
 	pid, err := d.readPIDFile()
 	if err != nil {
-		return fmt.Errorf("daemon not running")
+		if os.IsNotExist(err) {
+			return fmt.Errorf("daemon not running")
+		}
+		return fmt.Errorf("failed reading pidfile: %w", err)
 	}
 
 	// Send SIGTERM
@@ -291,27 +293,25 @@ func (d *Daemon) writePIDFile() error {
 	}
 
 	// Try to create PID file atomically with O_EXCL
-	f, err := os.OpenFile(d.pidFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		// If file exists, check if process is still alive
-		if os.IsExist(err) {
-			if oldPID, err2 := d.readPIDFile(); err2 == nil {
-				if isProcessAlive(oldPID) {
-					return fmt.Errorf("daemon already running (PID: %d)", oldPID)
-				}
-			}
-			// Stale PID file; remove and retry
-			if err := os.Remove(d.pidFile); err != nil {
-				return fmt.Errorf("stale pidfile exists and cannot remove: %w", err)
-			}
-			return d.writePIDFile()
+	for {
+		f, err := os.OpenFile(d.pidFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err == nil {
+			defer f.Close()
+			_, err = f.WriteString(strconv.Itoa(pid))
+			return err
 		}
-		return fmt.Errorf("failed to create PID file: %w", err)
+		if !os.IsExist(err) {
+			return fmt.Errorf("failed to create PID file: %w", err)
+		}
+		// File exists, check if process is still alive
+		if oldPID, err2 := d.readPIDFile(); err2 == nil && isProcessAlive(oldPID) {
+			return fmt.Errorf("daemon already running (PID: %d)", oldPID)
+		}
+		// Stale PID file; remove and retry
+		if err := os.Remove(d.pidFile); err != nil {
+			return fmt.Errorf("stale pidfile exists and cannot remove: %w", err)
+		}
 	}
-	defer f.Close()
-
-	_, err = f.WriteString(strconv.Itoa(pid))
-	return err
 }
 
 // isProcessAlive checks if a process with the given PID is alive
@@ -331,7 +331,7 @@ func (d *Daemon) readPIDFile() (int, error) {
 		return 0, err
 	}
 
-	return strconv.Atoi(string(data))
+	return strconv.Atoi(strings.TrimSpace(string(data)))
 }
 
 type HealthResponse struct {
