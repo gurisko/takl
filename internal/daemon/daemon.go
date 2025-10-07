@@ -1,5 +1,4 @@
 //go:build unix
-// +build unix
 
 package daemon
 
@@ -17,6 +16,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/gurisko/takl/internal/paths"
+	"github.com/gurisko/takl/internal/registry"
 )
 
 // ensureParentDir ensures the parent directory of the given path exists with secure permissions
@@ -56,47 +58,60 @@ type Daemon struct {
 	pidFile    string
 	listener   net.Listener
 	server     *http.Server
+	registry   *registry.Registry
+	httpClient *http.Client
 
 	// Stats
 	startTime time.Time
 }
 
 type Config struct {
-	SocketPath string
-	PIDFile    string
+	SocketPath   string
+	PIDFile      string
+	RegistryPath string
 }
 
 func DefaultConfig() *Config {
-	// Prefer XDG_RUNTIME_DIR for better security and auto-cleanup
-	var baseDir string
-	if xdgDir := os.Getenv("XDG_RUNTIME_DIR"); xdgDir != "" {
-		baseDir = filepath.Join(xdgDir, "takl")
-	} else {
-		homeDir, _ := os.UserHomeDir()
-		baseDir = filepath.Join(homeDir, ".takl")
-	}
-
 	return &Config{
-		SocketPath: filepath.Join(baseDir, "daemon.sock"),
-		PIDFile:    filepath.Join(baseDir, "daemon.pid"),
+		SocketPath:   paths.DefaultSocketPath(),
+		PIDFile:      paths.DefaultPIDPath(),
+		RegistryPath: paths.DefaultRegistryPath(),
 	}
 }
 
 func New(cfg *Config) (*Daemon, error) {
+	// Apply defaults for any empty fields
+	defaults := DefaultConfig()
 	if cfg.SocketPath == "" {
-		homeDir, _ := os.UserHomeDir()
-		cfg.SocketPath = filepath.Join(homeDir, ".takl", "daemon.sock")
+		cfg.SocketPath = defaults.SocketPath
+	}
+	if cfg.PIDFile == "" {
+		cfg.PIDFile = defaults.PIDFile
+	}
+	if cfg.RegistryPath == "" {
+		cfg.RegistryPath = defaults.RegistryPath
 	}
 
-	if cfg.PIDFile == "" {
-		homeDir, _ := os.UserHomeDir()
-		cfg.PIDFile = filepath.Join(homeDir, ".takl", "daemon.pid")
+	// Initialize registry
+	reg, err := registry.New(cfg.RegistryPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize registry: %w", err)
+	}
+
+	// Create HTTP client for Unix socket communication
+	tr := &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var nd net.Dialer
+			return nd.DialContext(ctx, "unix", cfg.SocketPath)
+		},
 	}
 
 	return &Daemon{
 		socketPath: cfg.SocketPath,
 		pidFile:    cfg.PIDFile,
-		startTime:  time.Now(),
+		registry:   reg,
+		httpClient: &http.Client{Transport: tr, Timeout: 2 * time.Second},
+		startTime:  time.Now().UTC(),
 	}, nil
 }
 
@@ -274,6 +289,11 @@ func (d *Daemon) shutdown() {
 		}
 	}
 
+	// Close HTTP client connections
+	if d.httpClient != nil {
+		d.httpClient.CloseIdleConnections()
+	}
+
 	// Close listener
 	if d.listener != nil {
 		d.listener.Close()
@@ -348,18 +368,6 @@ type StatusInfo struct {
 }
 
 func (d *Daemon) getHealth() (*HealthResponse, error) {
-	// Use HTTP client over Unix socket with timeout
-	tr := &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			var nd net.Dialer
-			return nd.DialContext(ctx, "unix", d.socketPath)
-		},
-	}
-	client := &http.Client{
-		Transport: tr,
-		Timeout:   2 * time.Second,
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
@@ -368,7 +376,7 @@ func (d *Daemon) getHealth() (*HealthResponse, error) {
 		return nil, err
 	}
 
-	resp, err := client.Do(req)
+	resp, err := d.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

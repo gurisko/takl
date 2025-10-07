@@ -1,5 +1,4 @@
 //go:build unix
-// +build unix
 
 package daemon
 
@@ -12,6 +11,20 @@ import (
 func (d *Daemon) setupRoutes(mux *http.ServeMux) {
 	// Health endpoint
 	mux.HandleFunc("/health", d.handleHealth)
+
+	// Project registry endpoints
+	mux.HandleFunc("/api/projects", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			d.handleRegisterProject(w, r)
+		case http.MethodGet:
+			d.handleListProjects(w, r)
+		default:
+			w.Header().Set("Allow", "GET, POST")
+			writeError(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+	mux.HandleFunc("/api/projects/", d.handleProjectByID)
 }
 
 func (d *Daemon) handleHealth(w http.ResponseWriter, r *http.Request) {
