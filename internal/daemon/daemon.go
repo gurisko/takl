@@ -36,18 +36,28 @@ func ensureParentDir(path string) error {
 	return nil
 }
 
-// removeSocketIfExists removes the socket file if it exists and is actually a socket
-func removeSocketIfExists(path string) error {
-	fi, err := os.Lstat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
+// removeSocketIfStale removes the socket file only if it's stale (not active).
+// Returns an error if the socket is active and being used by another daemon.
+func removeSocketIfStale(path string) error {
+	// Quick probe: try connecting to the socket
+	conn, err := net.DialTimeout("unix", path, 200*time.Millisecond)
+	if err == nil {
+		// Socket is active
+		conn.Close()
+		return fmt.Errorf("daemon appears to be running (socket active at %s)", path)
 	}
 
-	if fi.Mode()&os.ModeSocket != 0 {
+	// Socket isn't active; check if it exists and is a socket
+	fi, lerr := os.Lstat(path)
+	if lerr == nil && fi.Mode()&os.ModeSocket != 0 {
+		// It's a stale socket, safe to remove
 		return os.Remove(path)
+	}
+	if os.IsNotExist(lerr) {
+		return nil
+	}
+	if lerr != nil {
+		return lerr
 	}
 
 	return fmt.Errorf("refusing to remove non-socket path: %s", path)
@@ -131,8 +141,8 @@ func (d *Daemon) startForeground() error {
 		return fmt.Errorf("failed to prepare socket directory: %w", err)
 	}
 
-	// Remove any existing socket (but only if it's actually a socket)
-	if err := removeSocketIfExists(d.socketPath); err != nil {
+	// Remove any existing socket (but only if it's stale)
+	if err := removeSocketIfStale(d.socketPath); err != nil {
 		return err
 	}
 
@@ -161,8 +171,8 @@ func (d *Daemon) startForeground() error {
 
 	d.server = &http.Server{
 		Handler:      mux,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 5 * time.Minute, // Allow long-running operations like Jira pulls
 		IdleTimeout:  60 * time.Second,
 		BaseContext:  func(net.Listener) context.Context { return context.Background() },
 	}
@@ -202,6 +212,14 @@ func (d *Daemon) Stop() error {
 			return fmt.Errorf("daemon not running")
 		}
 		return fmt.Errorf("failed reading pidfile: %w", err)
+	}
+
+	// Verify identity: ensure the daemon is responding on the socket
+	if _, err := d.getHealth(); err != nil {
+		// Daemon not responding; clean up stale pidfile/socket
+		_ = removeSocketIfStale(d.socketPath)
+		_ = os.Remove(d.pidFile)
+		return fmt.Errorf("daemon not responding; cleaned up stale pidfile/socket")
 	}
 
 	// Send SIGTERM
@@ -300,8 +318,8 @@ func (d *Daemon) shutdown() {
 	}
 
 	// Clean up
-	removeSocketIfExists(d.socketPath)
-	os.Remove(d.pidFile)
+	_ = os.Remove(d.socketPath)
+	_ = os.Remove(d.pidFile)
 }
 
 func (d *Daemon) writePIDFile() error {

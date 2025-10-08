@@ -25,6 +25,9 @@ func (d *Daemon) setupRoutes(mux *http.ServeMux) {
 		}
 	})
 	mux.HandleFunc("/api/projects/", d.handleProjectByID)
+
+	// Jira bridge endpoints
+	mux.HandleFunc("/api/jira/pull", d.handleJiraPull)
 }
 
 func (d *Daemon) handleHealth(w http.ResponseWriter, r *http.Request) {

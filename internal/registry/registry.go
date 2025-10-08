@@ -140,8 +140,12 @@ func (r *Registry) RegisterAndSave(project *Project) error {
 		absPath = realPath
 	}
 
-	if _, err := os.Stat(absPath); err != nil {
+	st, err := os.Stat(absPath)
+	if err != nil {
 		return fmt.Errorf("%w: path=%s: %v", ErrInvalidPath, absPath, err)
+	}
+	if !st.IsDir() {
+		return fmt.Errorf("%w: path=%s: not a directory", ErrInvalidPath, absPath)
 	}
 
 	// Check if path already registered

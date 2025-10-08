@@ -17,6 +17,12 @@ import (
 	"github.com/gurisko/takl/internal/paths"
 )
 
+const (
+	// MaxJSONPayloadSize is the maximum size for JSON payloads in the API (1MB)
+	// This applies to both client requests and server responses
+	MaxJSONPayloadSize = 1 << 20
+)
+
 type Client struct {
 	http       *http.Client
 	baseURL    string
