@@ -14,13 +14,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gurisko/takl/internal/limits"
 	"github.com/gurisko/takl/internal/paths"
 )
 
 const (
 	// MaxJSONPayloadSize is the maximum size for JSON payloads in the API (1MB)
 	// This applies to both client requests and server responses
-	MaxJSONPayloadSize = 1 << 20
+	// Deprecated: Use limits.JSON instead
+	MaxJSONPayloadSize = limits.JSON
 )
 
 type Client struct {
@@ -36,9 +38,12 @@ func New() *Client {
 			var d net.Dialer
 			return d.DialContext(ctx, "unix", socketPath)
 		},
+		ResponseHeaderTimeout: 30 * time.Second,
+		IdleConnTimeout:       60 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
 	}
 	return &Client{
-		http:       &http.Client{Transport: tr, Timeout: 5 * time.Second},
+		http:       &http.Client{Transport: tr}, // no Timeout; use ctx per-request
 		baseURL:    "http://unix",
 		socketPath: socketPath,
 	}
@@ -58,7 +63,7 @@ func (e *APIError) Error() string {
 }
 
 func decodeAPIError(resp *http.Response) error {
-	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, limits.ErrorBody))
 	var m struct {
 		Error string `json:"error"`
 	}
@@ -80,7 +85,7 @@ func (c *Client) GetJSON(ctx context.Context, path string, out any) error {
 	if resp.StatusCode/100 != 2 {
 		return decodeAPIError(resp)
 	}
-	return json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(out)
+	return json.NewDecoder(io.LimitReader(resp.Body, limits.JSON)).Decode(out)
 }
 
 func (c *Client) PostJSON(ctx context.Context, path string, in any, out any) error {
@@ -106,7 +111,7 @@ func (c *Client) PostJSON(ctx context.Context, path string, in any, out any) err
 		io.Copy(io.Discard, resp.Body)
 		return nil
 	}
-	return json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(out)
+	return json.NewDecoder(io.LimitReader(resp.Body, limits.JSON)).Decode(out)
 }
 
 func (c *Client) Delete(ctx context.Context, path string) error {

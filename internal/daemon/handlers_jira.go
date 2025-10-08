@@ -7,8 +7,8 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/gurisko/takl/internal/apiclient"
 	"github.com/gurisko/takl/internal/bridge/jira"
+	"github.com/gurisko/takl/internal/limits"
 )
 
 // jiraPullRequest is the JSON payload for pull requests
@@ -25,14 +25,30 @@ func (d *Daemon) handleJiraPull(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req jiraPullRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, apiclient.MaxJSONPayloadSize)).Decode(&req); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, limits.JSON)).Decode(&req); err != nil {
 		writeError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	// Validate request
-	if req.ProjectPath == "" || req.Config.BaseURL == "" || req.Config.Project == "" {
-		writeError(w, "missing required fields", http.StatusBadRequest)
+	// Validate request - all fields required
+	if req.ProjectPath == "" {
+		writeError(w, "project_path is required", http.StatusBadRequest)
+		return
+	}
+	if req.Config.BaseURL == "" {
+		writeError(w, "config.base_url is required", http.StatusBadRequest)
+		return
+	}
+	if req.Config.Email == "" {
+		writeError(w, "config.email is required", http.StatusBadRequest)
+		return
+	}
+	if req.Config.APIToken == "" {
+		writeError(w, "config.api_token is required", http.StatusBadRequest)
+		return
+	}
+	if req.Config.Project == "" {
+		writeError(w, "config.project is required", http.StatusBadRequest)
 		return
 	}
 

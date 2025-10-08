@@ -18,28 +18,28 @@ type Issue struct {
 	Labels   []string  `yaml:"labels,omitempty" json:"labels,omitempty"`
 	Hash     string    `yaml:"hash" json:"hash"` // SHA256 of content (excluding hash field)
 
-	Description string       `yaml:"-" json:"-"` // Not in frontmatter
-	Comments    []Comment    `yaml:"-" json:"-"` // Not in frontmatter
-	Attachments []Attachment `yaml:"-" json:"-"` // Not in frontmatter
+	Description string       `yaml:"-" json:"description,omitempty"` // Not in frontmatter
+	Comments    []Comment    `yaml:"-" json:"comments,omitempty"`    // Not in frontmatter
+	Attachments []Attachment `yaml:"-" json:"attachments,omitempty"` // Not in frontmatter
 }
 
 // Comment represents a comment on an issue
 type Comment struct {
-	ID      string    `yaml:"-" json:"id"`
+	ID      string    `yaml:"-" json:"id,omitempty"`
 	Author  string    `yaml:"-" json:"author"`
 	Body    string    `yaml:"-" json:"body"`
 	Created time.Time `yaml:"-" json:"created"`
-	Updated time.Time `yaml:"-" json:"updated"`
+	Updated time.Time `yaml:"-" json:"updated,omitempty"`
 }
 
 // Attachment represents a file attachment on an issue
 type Attachment struct {
-	ID       string    `yaml:"-" json:"id"`
+	ID       string    `yaml:"-" json:"id,omitempty"`
 	Filename string    `yaml:"-" json:"filename"`
 	URL      string    `yaml:"-" json:"url"`
-	MimeType string    `yaml:"-" json:"mimeType"`
-	Size     int64     `yaml:"-" json:"size"`
-	Created  time.Time `yaml:"-" json:"created"`
+	MimeType string    `yaml:"-" json:"mime_type,omitempty"`
+	Size     int64     `yaml:"-" json:"size,omitempty"`
+	Created  time.Time `yaml:"-" json:"created,omitempty"`
 }
 
 // JiraConfig holds Jira connection configuration
