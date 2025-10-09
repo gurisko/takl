@@ -126,7 +126,8 @@ func (c *Client) SearchIssues(ctx context.Context, jql string, maxResults int) (
 		}
 
 		// Check if we have more pages
-		if searchResp.NextPageToken == "" || len(allIssues) >= maxResults {
+		// Treat maxResults <= 0 as unlimited
+		if searchResp.NextPageToken == "" || (maxResults > 0 && len(allIssues) >= maxResults) {
 			break
 		}
 
@@ -140,11 +141,18 @@ func (c *Client) SearchIssues(ctx context.Context, jql string, maxResults int) (
 
 // convertJiraIssue converts Jira API response to our Issue type
 func convertJiraIssue(jr jiraIssueResponse) Issue {
+	// Convert description from ADF to Markdown
+	description, err := ADFToMarkdown(jr.Fields.Description)
+	if err != nil {
+		log.Printf("[WARN] Failed to convert description for %s: %v", jr.Key, err)
+		description = "" // Fallback to empty string
+	}
+
 	issue := Issue{
 		JiraKey:     jr.Key,
 		JiraID:      jr.ID,
 		Title:       jr.Fields.Summary,
-		Description: extractDescription(jr.Fields.Description),
+		Description: description,
 		Status:      jr.Fields.Status.Name,
 		Reporter:    jr.Fields.Reporter.DisplayName,
 		Created:     jr.Fields.Created.Time,
@@ -159,10 +167,17 @@ func convertJiraIssue(jr jiraIssueResponse) Issue {
 	// Convert comments
 	issue.Comments = make([]Comment, 0, len(jr.Fields.Comment.Comments))
 	for _, jc := range jr.Fields.Comment.Comments {
+		// Convert comment body from ADF to Markdown
+		body, err := ADFToMarkdown(jc.Body)
+		if err != nil {
+			log.Printf("[WARN] Failed to convert comment body for %s: %v", jr.Key, err)
+			body = "" // Fallback to empty string
+		}
+
 		issue.Comments = append(issue.Comments, Comment{
 			ID:      jc.ID,
 			Author:  jc.Author.DisplayName,
-			Body:    extractDescription(jc.Body), // Also ADF format
+			Body:    body,
 			Created: jc.Created.Time,
 			Updated: jc.Updated.Time,
 		})

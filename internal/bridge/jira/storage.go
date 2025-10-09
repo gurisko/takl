@@ -245,6 +245,7 @@ func (s *Storage) parseMarkdown(content string) (*Issue, error) {
 }
 
 // parseBody parses the markdown body into description, comments, and attachments
+// Recognizes setext-style headings (underlined with = or -)
 func (s *Storage) parseBody(issue *Issue, body string) {
 	var sec string
 	var buf strings.Builder
@@ -262,16 +263,45 @@ func (s *Storage) parseBody(issue *Issue, body string) {
 		buf.Reset()
 	}
 
-	for _, line := range strings.Split(body, "\n") {
-		if strings.HasPrefix(line, "# ") {
-			flush()
-			sec = strings.TrimSpace(strings.TrimPrefix(line, "# "))
-			continue
+	lines := strings.Split(body, "\n")
+	i := 0
+	for i < len(lines) {
+		line := lines[i]
+
+		// Check if this is a setext-style heading
+		// (line followed by a line of = or - characters)
+		if i+1 < len(lines) {
+			nextLine := lines[i+1]
+			// Check if next line is all = or all -
+			if len(nextLine) > 0 && (isAllChars(nextLine, '=') || isAllChars(nextLine, '-')) {
+				// This is a section heading
+				flush()
+				sec = strings.TrimSpace(line)
+				i += 2 // Skip both the heading line and the underline
+				continue
+			}
 		}
+
+		// Regular content line
 		buf.WriteString(line)
 		buf.WriteByte('\n')
+		i++
 	}
 	flush()
+}
+
+// isAllChars checks if a string consists entirely of a specific character (and optional whitespace)
+func isAllChars(s string, ch rune) bool {
+	s = strings.TrimSpace(s)
+	if len(s) == 0 {
+		return false
+	}
+	for _, r := range s {
+		if r != ch {
+			return false
+		}
+	}
+	return true
 }
 
 // parseComments parses the comments section
@@ -316,35 +346,79 @@ func (s *Storage) parseComments(issue *Issue, content string) {
 }
 
 // parseAttachments parses the attachments section
+// Format: - [filename](url) (size bytes, timestamp)
+// Handles URLs with parentheses by counting balanced parentheses
 func (s *Storage) parseAttachments(issue *Issue, content string) {
 	lines := strings.Split(content, "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "- [") {
+		if !strings.HasPrefix(line, "- [") && !strings.HasPrefix(line, "-    [") {
 			continue
 		}
 
-		// Parse markdown link: - [filename](url) (size bytes, timestamp)
-		// This is a simple parser, could be more robust
-		if strings.Contains(line, "](") && strings.Contains(line, ") (") {
-			attachment := Attachment{}
-			// Extract filename
-			start := strings.Index(line, "[") + 1
-			end := strings.Index(line, "]")
-			if start > 0 && end > start {
-				attachment.Filename = line[start:end]
-			}
+		// Extract filename: find [ and ]
+		filenameStart := strings.Index(line, "[")
+		if filenameStart == -1 {
+			continue
+		}
+		filenameEnd := strings.Index(line[filenameStart:], "]")
+		if filenameEnd == -1 {
+			continue
+		}
+		filenameEnd += filenameStart
 
-			// Extract URL
-			start = strings.Index(line, "(") + 1
-			end = strings.Index(line, ")")
-			if start > 0 && end > start {
-				attachment.URL = line[start:end]
-			}
+		filename := line[filenameStart+1 : filenameEnd]
+		if filename == "" {
+			// Empty filename - skip unless there's a URL
+			// (allow for edge case testing)
+		}
 
-			issue.Attachments = append(issue.Attachments, attachment)
+		// Check for ]( after filename
+		if filenameEnd+2 >= len(line) || line[filenameEnd:filenameEnd+2] != "](" {
+			continue
+		}
+
+		// Extract URL by finding matching closing parenthesis
+		urlStart := filenameEnd + 2
+		urlEnd := findMatchingParen(line, urlStart)
+		if urlEnd == -1 {
+			continue
+		}
+
+		url := line[urlStart:urlEnd]
+		if url == "" {
+			continue
+		}
+
+		// Skip if both filename and URL are empty
+		if filename == "" && url == "" {
+			continue
+		}
+
+		issue.Attachments = append(issue.Attachments, Attachment{
+			Filename: filename,
+			URL:      url,
+		})
+	}
+}
+
+// findMatchingParen finds the position of the closing parenthesis that matches
+// the opening parenthesis at position start-1, handling nested parentheses.
+// Returns -1 if no matching parenthesis is found.
+func findMatchingParen(s string, start int) int {
+	depth := 1 // We're already inside one level of parens
+	for i := start; i < len(s); i++ {
+		switch s[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i
+			}
 		}
 	}
+	return -1
 }
 
 // ReadExistingHash reads the hash field from an existing issue file.
@@ -416,16 +490,18 @@ func (s *Storage) issueToMarkdown(issue *Issue) string {
 	buf.Write(yamlData)
 	buf.WriteString("---\n\n")
 
-	// Write description
-	buf.WriteString("# Description\n\n")
+	// Write description (setext-style heading)
+	buf.WriteString("Description\n")
+	buf.WriteString("===========\n\n")
 	if issue.Description != "" {
 		buf.WriteString(issue.Description)
 		buf.WriteString("\n\n")
 	}
 
-	// Write comments
+	// Write comments (setext-style heading)
 	if len(issue.Comments) > 0 {
-		buf.WriteString("# Comments\n\n")
+		buf.WriteString("Comments\n")
+		buf.WriteString("========\n\n")
 		for _, comment := range issue.Comments {
 			buf.WriteString(fmt.Sprintf("## Comment by %s at %s\n\n",
 				comment.Author,
@@ -435,9 +511,10 @@ func (s *Storage) issueToMarkdown(issue *Issue) string {
 		}
 	}
 
-	// Write attachments
+	// Write attachments (setext-style heading)
 	if len(issue.Attachments) > 0 {
-		buf.WriteString("# Attachments\n\n")
+		buf.WriteString("Attachments\n")
+		buf.WriteString("===========\n\n")
 		for _, att := range issue.Attachments {
 			buf.WriteString(fmt.Sprintf("- [%s](%s) (%d bytes, %s)\n",
 				att.Filename,
