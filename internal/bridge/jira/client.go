@@ -33,7 +33,7 @@ func NewClient(baseURL, email, apiToken string) *Client {
 
 // doRequest executes an HTTP request with authentication
 func (c *Client) doRequest(ctx context.Context, method, path string, body interface{}) (*http.Response, error) {
-	url := c.baseURL + path
+	endpoint := c.baseURL + path
 
 	var reqBody io.Reader
 	if body != nil {
@@ -44,7 +44,7 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 		reqBody = bytes.NewReader(data)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
