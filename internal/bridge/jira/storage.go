@@ -185,9 +185,12 @@ func (s *Storage) matchesFilter(issue *Issue, filter IssueFilter) bool {
 		return false
 	}
 
-	// Assignee filter
-	if filter.Assignee != "" && !strings.EqualFold(issue.Assignee, filter.Assignee) {
-		return false
+	// Assignee filter - case-insensitive substring match (works for name or email)
+	if a := strings.TrimSpace(filter.Assignee); a != "" {
+		al, il := strings.ToLower(a), strings.ToLower(issue.Assignee)
+		if il == "" || !(il == al || strings.Contains(il, al)) {
+			return false
+		}
 	}
 
 	// Labels filter (must have ALL specified labels)
