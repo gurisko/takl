@@ -4,6 +4,7 @@ package daemon
 
 import (
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/gurisko/takl/internal/bridge/jira"
@@ -80,6 +81,14 @@ func (d *Daemon) handleListIssues(w http.ResponseWriter, r *http.Request) {
 		writeError(w, "failed to list issues: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	// Sort by Updated desc, then by JiraKey for stable ordering
+	sort.Slice(issues, func(i, j int) bool {
+		if !issues[i].Updated.Equal(issues[j].Updated) {
+			return issues[i].Updated.After(issues[j].Updated)
+		}
+		return issues[i].JiraKey < issues[j].JiraKey
+	})
 
 	resp := ListIssuesResponse{
 		Issues: issues,
