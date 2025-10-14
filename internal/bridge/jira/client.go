@@ -269,3 +269,48 @@ func (c *Client) FetchProjectMembers(ctx context.Context, projectKey string) ([]
 	log.Printf("[DEBUG] FetchProjectMembers: Complete - fetched %d total members for project %s", len(allMembers), projectKey)
 	return allMembers, nil
 }
+
+// FetchProjectStatuses fetches all statuses for a project grouped by issue type
+// Returns a deduplicated list of all unique statuses across all issue types
+func (c *Client) FetchProjectStatuses(ctx context.Context, projectKey string) ([]*StatusInfo, error) {
+	// URL-escape project key for safety
+	escapedProjectKey := url.QueryEscape(projectKey)
+	path := fmt.Sprintf("/rest/api/3/project/%s/statuses", escapedProjectKey)
+
+	log.Printf("[DEBUG] FetchProjectStatuses: Fetching statuses for project %s", projectKey)
+
+	resp, err := c.doRequest(ctx, "GET", path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch project statuses: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var issueTypes []jiraProjectStatusesResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, MaxSearchResponseSize)).Decode(&issueTypes); err != nil {
+		return nil, fmt.Errorf("failed to decode statuses response: %w", err)
+	}
+
+	// Deduplicate statuses across issue types (same status can appear in multiple issue types)
+	statusMap := make(map[string]*StatusInfo)
+	for _, issueType := range issueTypes {
+		for _, jiraStatus := range issueType.Statuses {
+			// Use status ID as key for deduplication (more stable than name)
+			if _, exists := statusMap[jiraStatus.ID]; !exists {
+				statusMap[jiraStatus.ID] = &StatusInfo{
+					ID:       jiraStatus.ID,
+					Name:     jiraStatus.Name,
+					Category: jiraStatus.StatusCategory.Key,
+				}
+			}
+		}
+	}
+
+	// Convert map to slice
+	statuses := make([]*StatusInfo, 0, len(statusMap))
+	for _, status := range statusMap {
+		statuses = append(statuses, status)
+	}
+
+	log.Printf("[DEBUG] FetchProjectStatuses: Complete - fetched %d unique statuses for project %s", len(statuses), projectKey)
+	return statuses, nil
+}

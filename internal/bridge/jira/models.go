@@ -201,3 +201,36 @@ type jiraUserResponse struct {
 	EmailAddress string `json:"emailAddress"`
 	Active       bool   `json:"active"`
 }
+
+// jiraProjectStatusesResponse represents the response from GET /rest/api/3/project/{projectKey}/statuses
+//
+// Example response:
+//
+//	[{
+//	  "id": "10000",
+//	  "name": "Bug",
+//	  "statuses": [{
+//	    "id": "10001",
+//	    "name": "Done",
+//	    "statusCategory": {
+//	      "id": 3,
+//	      "key": "done",
+//	      "name": "Done",
+//	      "colorName": "green"
+//	    }
+//	  }]
+//	}]
+type jiraProjectStatusesResponse struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Statuses []struct {
+		ID             string `json:"id"`
+		Name           string `json:"name"`
+		StatusCategory struct {
+			ID        int    `json:"id"`
+			Key       string `json:"key"`       // "new", "indeterminate", "done", or "undefined"
+			Name      string `json:"name"`      // "To Do", "In Progress", "Done", etc.
+			ColorName string `json:"colorName"` // "blue-gray", "yellow", "green", etc.
+		} `json:"statusCategory"`
+	} `json:"statuses"`
+}

@@ -172,3 +172,46 @@ func (mc *MemberCache) ParseUser(userStr string) (*Member, error) {
 
 	return nil, fmt.Errorf("user %q not found", userStr)
 }
+
+// StatusInfo represents a Jira status with its category
+type StatusInfo struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Category string `json:"category"` // "new", "indeterminate", "done", or "undefined"
+}
+
+// WorkflowCache holds cached project statuses
+type WorkflowCache struct {
+	Statuses map[string]*StatusInfo `json:"statuses"` // Key is status ID
+}
+
+// NewWorkflowCache creates an empty workflow cache
+func NewWorkflowCache() *WorkflowCache {
+	return &WorkflowCache{
+		Statuses: make(map[string]*StatusInfo),
+	}
+}
+
+// AddStatus adds a status to the cache
+func (wc *WorkflowCache) AddStatus(status *StatusInfo) {
+	if wc.Statuses == nil {
+		wc.Statuses = make(map[string]*StatusInfo)
+	}
+	wc.Statuses[status.ID] = status
+}
+
+// FindByID looks up a status by ID
+func (wc *WorkflowCache) FindByID(id string) *StatusInfo {
+	return wc.Statuses[id]
+}
+
+// GetByCategory returns all statuses in a given category
+func (wc *WorkflowCache) GetByCategory(category string) []*StatusInfo {
+	var statuses []*StatusInfo
+	for _, status := range wc.Statuses {
+		if status.Category == category {
+			statuses = append(statuses, status)
+		}
+	}
+	return statuses
+}

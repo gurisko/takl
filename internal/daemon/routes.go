@@ -29,6 +29,7 @@ func (d *Daemon) setupRoutes(mux *http.ServeMux) {
 	// Jira bridge endpoints
 	mux.HandleFunc("/api/jira/pull", d.handleJiraPull)
 	mux.HandleFunc("/api/jira/members", d.handleJiraMembers)
+	mux.HandleFunc("/api/jira/workflow", d.handleJiraWorkflow)
 
 	// Issue browsing endpoints
 	mux.HandleFunc("/api/issues", d.handleListIssues)

@@ -55,6 +55,41 @@ func RefreshMemberCache(ctx context.Context, client *Client, projectPath, projec
 	return cache, nil
 }
 
+// RefreshWorkflowCache fetches project statuses from Jira and updates the local cache.
+// Returns the cache (loaded from disk if fetch fails) and any error.
+// This function is non-fatal - it will return a cache even if fetching fails.
+func RefreshWorkflowCache(ctx context.Context, client *Client, projectPath, projectKey string) (*WorkflowCache, error) {
+	log.Printf("[DEBUG] RefreshWorkflowCache: Fetching project statuses")
+
+	// Fetch statuses from Jira
+	statuses, err := client.FetchProjectStatuses(ctx, projectKey)
+	if err != nil {
+		log.Printf("[WARN] RefreshWorkflowCache: Failed to fetch project statuses: %v", err)
+		// Try to load existing cache as fallback
+		cache, loadErr := LoadWorkflowCache(projectPath)
+		if loadErr != nil {
+			log.Printf("[WARN] RefreshWorkflowCache: Failed to load existing cache: %v", loadErr)
+			return NewWorkflowCache(), fmt.Errorf("failed to fetch statuses: %w", err)
+		}
+		return cache, fmt.Errorf("failed to fetch statuses (using cached data): %w", err)
+	}
+
+	// Create new cache from fetched data (don't merge with old cache)
+	cache := NewWorkflowCache()
+	for _, status := range statuses {
+		cache.AddStatus(status)
+	}
+
+	// Save cache
+	if err := SaveWorkflowCache(projectPath, cache); err != nil {
+		log.Printf("[WARN] RefreshWorkflowCache: Failed to save cache: %v", err)
+		return cache, fmt.Errorf("failed to save cache: %w", err)
+	}
+
+	log.Printf("[DEBUG] RefreshWorkflowCache: Successfully cached %d statuses", len(statuses))
+	return cache, nil
+}
+
 // Pull fetches issues from Jira and saves them to local storage
 func Pull(ctx context.Context, client *Client, storage *Storage, config *JiraConfig) (*PullResult, error) {
 	result := &PullResult{
@@ -63,6 +98,9 @@ func Pull(ctx context.Context, client *Client, storage *Storage, config *JiraCon
 
 	// Fetch and cache project members first (non-fatal)
 	memberCache, _ := RefreshMemberCache(ctx, client, storage.projectPath, config.Project)
+
+	// Fetch and cache project workflow/statuses (non-fatal)
+	_, _ = RefreshWorkflowCache(ctx, client, storage.projectPath, config.Project)
 
 	// Search for all issues in the project
 	jql := fmt.Sprintf("project=%s ORDER BY updated DESC", config.Project)

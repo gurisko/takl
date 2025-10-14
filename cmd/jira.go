@@ -44,15 +44,30 @@ display names and emails to Jira account IDs when pushing changes.`,
 	RunE: runJiraMembers,
 }
 
+var jiraWorkflowCmd = &cobra.Command{
+	Use:   "workflow",
+	Short: "Fetch and display project workflow statuses",
+	Long: `Fetch all statuses for the Jira project and cache them locally.
+
+The workflow cache is stored in .takl/jira-workflow.json and includes status
+categories (new, indeterminate, done, undefined) for each status.`,
+	RunE: runJiraWorkflow,
+}
+
 var membersJSONOutput bool
+var workflowJSONOutput bool
 
 func init() {
 	rootCmd.AddCommand(jiraCmd)
 	jiraCmd.AddCommand(jiraPullCmd)
 	jiraCmd.AddCommand(jiraMembersCmd)
+	jiraCmd.AddCommand(jiraWorkflowCmd)
 
 	// Add flags for members command
 	jiraMembersCmd.Flags().BoolVar(&membersJSONOutput, "json", false, "Output as JSON")
+
+	// Add flags for workflow command
+	jiraWorkflowCmd.Flags().BoolVar(&workflowJSONOutput, "json", false, "Output as JSON")
 }
 
 func runJiraPull(cmd *cobra.Command, args []string) error {
@@ -139,6 +154,80 @@ func runJiraMembers(cmd *cobra.Command, args []string) error {
 		}
 		w.Flush()
 		fmt.Printf("\nTotal: %d members\n", len(members))
+	}
+
+	return nil
+}
+
+func runJiraWorkflow(cmd *cobra.Command, args []string) error {
+	config, projectPath, err := jira.LoadConfigFromCwd()
+	if err != nil {
+		return err
+	}
+
+	// Create API client
+	client := apiclient.New()
+
+	// Prepare request
+	reqBody := map[string]interface{}{
+		"project_path": projectPath,
+		"config":       config,
+	}
+
+	// Make API call to daemon
+	var statuses []*jira.StatusInfo
+	if err := client.PostJSON(cmd.Context(), "/api/jira/workflow", reqBody, &statuses); err != nil {
+		return fmt.Errorf("workflow request failed: %w", err)
+	}
+
+	// Output results
+	if workflowJSONOutput {
+		// JSON output
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(statuses); err != nil {
+			return fmt.Errorf("failed to encode JSON: %w", err)
+		}
+	} else {
+		// Group by category for table output
+		categories := map[string][]*jira.StatusInfo{
+			"new":           {},
+			"indeterminate": {},
+			"done":          {},
+			"undefined":     {},
+		}
+
+		for _, status := range statuses {
+			categories[status.Category] = append(categories[status.Category], status)
+		}
+
+		// Display by category
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintf(w, "STATUS\tCATEGORY\tID\n")
+
+		// Display in a logical order: To Do, In Progress, Done, then undefined
+		categoryOrder := []struct {
+			key  string
+			name string
+		}{
+			{"new", "To Do"},
+			{"indeterminate", "In Progress"},
+			{"done", "Done"},
+			{"undefined", "Undefined"},
+		}
+
+		for _, cat := range categoryOrder {
+			for _, status := range categories[cat.key] {
+				fmt.Fprintf(w, "%s\t%s\t%s\n",
+					status.Name,
+					cat.name,
+					status.ID,
+				)
+			}
+		}
+
+		w.Flush()
+		fmt.Printf("\nTotal: %d statuses\n", len(statuses))
 	}
 
 	return nil
