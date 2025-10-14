@@ -70,9 +70,11 @@ type jiraIssueResponse struct {
 			Name string `json:"name"`
 		} `json:"status"`
 		Assignee *struct {
+			AccountID   string `json:"accountId"`
 			DisplayName string `json:"displayName"`
 		} `json:"assignee"`
 		Reporter struct {
+			AccountID   string `json:"accountId"`
 			DisplayName string `json:"displayName"`
 		} `json:"reporter"`
 		Created jiraTime `json:"created"`
@@ -116,6 +118,7 @@ type jiraIssueResponse struct {
 type jiraComment struct {
 	ID     string `json:"id"`
 	Author struct {
+		AccountID   string `json:"accountId"`
 		DisplayName string `json:"displayName"`
 	} `json:"author"`
 	// API v3 uses ADF (Atlassian Document Format) for rich text
@@ -180,4 +183,21 @@ type jiraSearchResponse struct {
 	Issues        []jiraIssueResponse `json:"issues"`
 	Total         int                 `json:"total"`
 	NextPageToken string              `json:"nextPageToken,omitempty"`
+}
+
+// jiraUserResponse represents a Jira user from the API
+//
+// Example response from GET /rest/api/3/user/assignable/search:
+//
+//	{
+//	  "accountId": "712020:45533243-a51d-418d-a609-18e03bd44339",
+//	  "displayName": "John Doe",
+//	  "emailAddress": "john@example.com",
+//	  "active": true
+//	}
+type jiraUserResponse struct {
+	AccountID    string `json:"accountId"`
+	DisplayName  string `json:"displayName"`
+	EmailAddress string `json:"emailAddress"`
+	Active       bool   `json:"active"`
 }

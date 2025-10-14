@@ -14,16 +14,60 @@ type PullResult struct {
 	Errors  []string `json:"errors"`
 }
 
+// RefreshMemberCache fetches project members from Jira and updates the local cache.
+// Returns the cache (loaded from disk if fetch fails) and any error.
+// This function is non-fatal - it will return a cache even if fetching fails.
+func RefreshMemberCache(ctx context.Context, client *Client, projectPath, projectKey string) (*MemberCache, error) {
+	log.Printf("[DEBUG] RefreshMemberCache: Fetching project members")
+
+	// Fetch members from Jira
+	members, err := client.FetchProjectMembers(ctx, projectKey)
+	if err != nil {
+		log.Printf("[WARN] RefreshMemberCache: Failed to fetch project members: %v", err)
+		// Try to load existing cache as fallback
+		cache, loadErr := LoadMembersCache(projectPath)
+		if loadErr != nil {
+			log.Printf("[WARN] RefreshMemberCache: Failed to load existing cache: %v", loadErr)
+			return NewMemberCache(), fmt.Errorf("failed to fetch members: %w", err)
+		}
+		return cache, fmt.Errorf("failed to fetch members (using cached data): %w", err)
+	}
+
+	// Load existing cache (or create new one)
+	cache, err := LoadMembersCache(projectPath)
+	if err != nil {
+		log.Printf("[WARN] RefreshMemberCache: Failed to load existing cache: %v", err)
+		cache = NewMemberCache()
+	}
+
+	// Update cache with fetched members
+	for _, member := range members {
+		cache.Add(member)
+	}
+
+	// Save cache
+	if err := SaveMembersCache(projectPath, cache); err != nil {
+		log.Printf("[WARN] RefreshMemberCache: Failed to save cache: %v", err)
+		return cache, fmt.Errorf("failed to save cache: %w", err)
+	}
+
+	log.Printf("[DEBUG] RefreshMemberCache: Successfully cached %d members", len(members))
+	return cache, nil
+}
+
 // Pull fetches issues from Jira and saves them to local storage
 func Pull(ctx context.Context, client *Client, storage *Storage, config *JiraConfig) (*PullResult, error) {
 	result := &PullResult{
 		Errors: make([]string, 0),
 	}
 
+	// Fetch and cache project members first (non-fatal)
+	memberCache, _ := RefreshMemberCache(ctx, client, storage.projectPath, config.Project)
+
 	// Search for all issues in the project
 	jql := fmt.Sprintf("project=%s ORDER BY updated DESC", config.Project)
 	log.Printf("[DEBUG] Pull: Searching Jira with JQL: %s", jql)
-	issues, err := client.SearchIssues(ctx, jql, MaxSearchResults)
+	issues, err := client.SearchIssues(ctx, jql, MaxSearchResults, memberCache)
 	if err != nil {
 		return nil, fmt.Errorf("failed to search issues: %w", err)
 	}

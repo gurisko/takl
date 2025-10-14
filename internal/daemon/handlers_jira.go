@@ -25,7 +25,9 @@ func (d *Daemon) handleJiraPull(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req jiraPullRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, limits.JSON)).Decode(&req); err != nil {
+	dec := json.NewDecoder(io.LimitReader(r.Body, limits.JSON))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
 		writeError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -73,4 +75,63 @@ func (d *Daemon) handleJiraPull(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(result)
+}
+
+// handleJiraMembers handles POST /api/jira/members
+func (d *Daemon) handleJiraMembers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req jiraPullRequest
+	dec := json.NewDecoder(io.LimitReader(r.Body, limits.JSON))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Validate request
+	if req.ProjectPath == "" {
+		writeError(w, "project_path is required", http.StatusBadRequest)
+		return
+	}
+	if req.Config.BaseURL == "" {
+		writeError(w, "config.base_url is required", http.StatusBadRequest)
+		return
+	}
+	if req.Config.Email == "" {
+		writeError(w, "config.email is required", http.StatusBadRequest)
+		return
+	}
+	if req.Config.APIToken == "" {
+		writeError(w, "config.api_token is required", http.StatusBadRequest)
+		return
+	}
+	if req.Config.Project == "" {
+		writeError(w, "config.project is required", http.StatusBadRequest)
+		return
+	}
+
+	// Create Jira client
+	client := jira.NewClient(req.Config.BaseURL, req.Config.Email, req.Config.APIToken)
+
+	// Refresh member cache
+	cache, err := jira.RefreshMemberCache(r.Context(), client, req.ProjectPath, req.Config.Project)
+	if err != nil {
+		writeError(w, "failed to refresh cache: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Convert cache to members slice for response
+	members := make([]*jira.Member, 0, len(cache.Members))
+	for _, member := range cache.Members {
+		members = append(members, member)
+	}
+
+	// Return members list
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(members)
 }

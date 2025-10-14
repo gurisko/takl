@@ -3,7 +3,10 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"text/tabwriter"
 
 	"github.com/gurisko/takl/internal/apiclient"
 	"github.com/gurisko/takl/internal/bridge/jira"
@@ -31,9 +34,25 @@ The Jira configuration should be in .takl/jira.json with the following format:
 	RunE: runJiraPull,
 }
 
+var jiraMembersCmd = &cobra.Command{
+	Use:   "members",
+	Short: "Fetch and cache project members",
+	Long: `Fetch all assignable users from the Jira project and cache them locally.
+
+The member cache is stored in .takl/jira-members.json and is used to resolve
+display names and emails to Jira account IDs when pushing changes.`,
+	RunE: runJiraMembers,
+}
+
+var membersJSONOutput bool
+
 func init() {
 	rootCmd.AddCommand(jiraCmd)
 	jiraCmd.AddCommand(jiraPullCmd)
+	jiraCmd.AddCommand(jiraMembersCmd)
+
+	// Add flags for members command
+	jiraMembersCmd.Flags().BoolVar(&membersJSONOutput, "json", false, "Output as JSON")
 }
 
 func runJiraPull(cmd *cobra.Command, args []string) error {
@@ -68,6 +87,58 @@ func runJiraPull(cmd *cobra.Command, args []string) error {
 		for _, err := range result.Errors {
 			fmt.Printf("  - %v\n", err)
 		}
+	}
+
+	return nil
+}
+
+func runJiraMembers(cmd *cobra.Command, args []string) error {
+	config, projectPath, err := jira.LoadConfigFromCwd()
+	if err != nil {
+		return err
+	}
+
+	// Create API client
+	client := apiclient.New()
+
+	// Prepare request
+	reqBody := map[string]interface{}{
+		"project_path": projectPath,
+		"config":       config,
+	}
+
+	// Make API call to daemon
+	var members []*jira.Member
+	if err := client.PostJSON(cmd.Context(), "/api/jira/members", reqBody, &members); err != nil {
+		return fmt.Errorf("members request failed: %w", err)
+	}
+
+	// Output results
+	if membersJSONOutput {
+		// JSON output
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(members); err != nil {
+			return fmt.Errorf("failed to encode JSON: %w", err)
+		}
+	} else {
+		// Table output
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintf(w, "DISPLAY NAME\tEMAIL\tACCOUNT ID\tACTIVE\n")
+		for _, member := range members {
+			active := "Yes"
+			if !member.Active {
+				active = "No"
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
+				member.DisplayName,
+				member.EmailAddress,
+				member.AccountID,
+				active,
+			)
+		}
+		w.Flush()
+		fmt.Printf("\nTotal: %d members\n", len(members))
 	}
 
 	return nil

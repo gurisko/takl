@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -69,7 +70,8 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 }
 
 // SearchIssues searches for issues using JQL with pagination
-func (c *Client) SearchIssues(ctx context.Context, jql string, maxResults int) ([]Issue, error) {
+// If cache is provided, formats users as "Display Name <email>", otherwise uses display name only
+func (c *Client) SearchIssues(ctx context.Context, jql string, maxResults int, cache *MemberCache) ([]Issue, error) {
 	var allIssues []Issue
 	nextPageToken := ""
 	pageNum := 1
@@ -122,7 +124,7 @@ func (c *Client) SearchIssues(ctx context.Context, jql string, maxResults int) (
 
 		// Convert and append issues
 		for _, jiraIssue := range searchResp.Issues {
-			allIssues = append(allIssues, convertJiraIssue(jiraIssue))
+			allIssues = append(allIssues, convertJiraIssue(jiraIssue, cache))
 		}
 
 		// Check if we have more pages
@@ -140,12 +142,24 @@ func (c *Client) SearchIssues(ctx context.Context, jql string, maxResults int) (
 }
 
 // convertJiraIssue converts Jira API response to our Issue type
-func convertJiraIssue(jr jiraIssueResponse) Issue {
+// If cache is provided, formats users as "Display Name <email>", otherwise uses display name only
+func convertJiraIssue(jr jiraIssueResponse, cache *MemberCache) Issue {
 	// Convert description from ADF to Markdown
 	description, err := ADFToMarkdown(jr.Fields.Description)
 	if err != nil {
 		log.Printf("[WARN] Failed to convert description for %s: %v", jr.Key, err)
 		description = "" // Fallback to empty string
+	}
+
+	// Helper to format user from accountId
+	formatUser := func(accountID, displayName string) string {
+		if cache != nil {
+			if member := cache.FindByAccountID(accountID); member != nil {
+				return member.FormatMember()
+			}
+		}
+		// Fallback to display name only
+		return displayName
 	}
 
 	issue := Issue{
@@ -154,14 +168,14 @@ func convertJiraIssue(jr jiraIssueResponse) Issue {
 		Title:       jr.Fields.Summary,
 		Description: description,
 		Status:      jr.Fields.Status.Name,
-		Reporter:    jr.Fields.Reporter.DisplayName,
+		Reporter:    formatUser(jr.Fields.Reporter.AccountID, jr.Fields.Reporter.DisplayName),
 		Created:     jr.Fields.Created.Time,
 		Updated:     jr.Fields.Updated.Time,
 		Labels:      jr.Fields.Labels,
 	}
 
 	if jr.Fields.Assignee != nil {
-		issue.Assignee = jr.Fields.Assignee.DisplayName
+		issue.Assignee = formatUser(jr.Fields.Assignee.AccountID, jr.Fields.Assignee.DisplayName)
 	}
 
 	// Convert comments
@@ -176,7 +190,7 @@ func convertJiraIssue(jr jiraIssueResponse) Issue {
 
 		issue.Comments = append(issue.Comments, Comment{
 			ID:      jc.ID,
-			Author:  jc.Author.DisplayName,
+			Author:  formatUser(jc.Author.AccountID, jc.Author.DisplayName),
 			Body:    body,
 			Created: jc.Created.Time,
 			Updated: jc.Updated.Time,
@@ -197,4 +211,61 @@ func convertJiraIssue(jr jiraIssueResponse) Issue {
 	}
 
 	return issue
+}
+
+// FetchProjectMembers fetches all assignable users for a project with pagination
+// The Jira API limits results per request, so we paginate using startAt to get all users
+func (c *Client) FetchProjectMembers(ctx context.Context, projectKey string) ([]*Member, error) {
+	var allMembers []*Member
+	startAt := 0
+	pageSize := 1_000
+	pageNum := 1
+
+	// URL-escape project key for safety
+	escapedProjectKey := url.QueryEscape(projectKey)
+
+	for {
+		// Build paginated request path
+		path := fmt.Sprintf("/rest/api/3/user/assignable/search?project=%s&maxResults=%d&startAt=%d",
+			escapedProjectKey, pageSize, startAt)
+
+		log.Printf("[DEBUG] FetchProjectMembers: Fetching page %d (startAt=%d)", pageNum, startAt)
+
+		resp, err := c.doRequest(ctx, "GET", path, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch project members: %w", err)
+		}
+
+		var users []jiraUserResponse
+		if err := json.NewDecoder(io.LimitReader(resp.Body, MaxSearchResponseSize)).Decode(&users); err != nil {
+			resp.Body.Close()
+			return nil, fmt.Errorf("failed to decode users response: %w", err)
+		}
+		resp.Body.Close()
+
+		log.Printf("[DEBUG] FetchProjectMembers: Page %d returned %d users (total so far: %d)",
+			pageNum, len(users), len(allMembers)+len(users))
+
+		// Convert and append users
+		for _, user := range users {
+			allMembers = append(allMembers, &Member{
+				AccountID:    user.AccountID,
+				DisplayName:  user.DisplayName,
+				EmailAddress: user.EmailAddress,
+				Active:       user.Active,
+			})
+		}
+
+		// Check if we've fetched all users
+		// If we got fewer results than requested, we've reached the end
+		if len(users) < pageSize {
+			break
+		}
+
+		startAt += len(users)
+		pageNum++
+	}
+
+	log.Printf("[DEBUG] FetchProjectMembers: Complete - fetched %d total members for project %s", len(allMembers), projectKey)
+	return allMembers, nil
 }

@@ -14,6 +14,7 @@ import (
 
 // Storage handles reading and writing issue markdown files
 type Storage struct {
+	projectPath    string
 	issuesDir      string
 	attachmentsDir string
 }
@@ -32,6 +33,7 @@ func NewStorage(projectPath string) (*Storage, error) {
 	}
 
 	return &Storage{
+		projectPath:    projectPath,
 		issuesDir:      issuesDir,
 		attachmentsDir: attachmentsDir,
 	}, nil
@@ -48,6 +50,7 @@ func OpenStorage(projectPath string) (*Storage, error) {
 	}
 
 	return &Storage{
+		projectPath:    projectPath,
 		issuesDir:      issuesDir,
 		attachmentsDir: attachmentsDir,
 	}, nil
