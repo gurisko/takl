@@ -754,9 +754,11 @@ func parseCodeBlock(lines []string, start int) (ADFNode, int) {
 
 	var code strings.Builder
 	i := start + 1
+	closed := false
 
 	for i < len(lines) {
 		if strings.HasPrefix(lines[i], "```") {
+			closed = true
 			break
 		}
 		if i > start+1 {
@@ -779,7 +781,11 @@ func parseCodeBlock(lines []string, start int) (ADFNode, int) {
 		}
 	}
 
-	return node, i - start + 1
+	// If closed, consume the closing fence line; otherwise don't over-consume
+	if closed {
+		return node, i - start + 1
+	}
+	return node, i - start
 }
 
 // parseBlockquote parses a blockquote
