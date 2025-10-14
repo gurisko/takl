@@ -47,6 +47,63 @@ takl projects list
 
 ## Commands
 
+### Issue Management
+
+```bash
+# List issues with filters
+takl list                              # List all issues
+takl list --status "In Progress"       # Filter by status
+takl list --assignee "John"            # Filter by assignee (name or email substring)
+takl list --labels bug,urgent          # Filter by labels (must match all)
+takl list --search "database error"    # Search in title and description
+takl list --pipe                       # Output JSON for piping
+
+# Show issue details
+takl show PROJ-123                     # Display full issue details
+takl show PROJ-456 --json              # Output as JSON
+
+# Pipe issues as JSON (for Unix pipeline composition)
+takl pipe                              # All issues as JSON
+takl pipe --status Open | jq '.count'  # Count open issues
+takl pipe | jq '.issues[] | select(.status=="Done")'  # Filter with jq
+```
+
+**Note:** The `--assignee` filter supports case-insensitive substring matching on both display names and email addresses.
+
+### Jira Bridge
+
+**Configuration:** Create `.takl/jira.json` in your project directory:
+
+```json
+{
+  "base_url": "https://your-domain.atlassian.net",
+  "email": "your-email@example.com",
+  "api_token": "your-api-token",
+  "project": "PROJ"
+}
+```
+
+To create an API token, visit: https://id.atlassian.com/manage-profile/security/api-tokens
+
+**Commands:**
+
+```bash
+# Pull issues from Jira to local markdown files
+takl jira pull
+
+# Fetch and cache project members (for assignee resolution)
+takl jira members          # Table output
+takl jira members --json   # JSON output
+
+# Fetch and cache project workflow statuses
+takl jira workflow         # Table output grouped by category
+takl jira workflow --json  # JSON output
+```
+
+**Caches:**
+- `.takl/jira-members.json` - Project members cache (used for assignee resolution)
+- `.takl/jira-workflow.json` - Workflow statuses cache (includes status categories)
+
 ### Daemon Management
 
 ```bash
