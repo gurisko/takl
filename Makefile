@@ -1,4 +1,4 @@
-.PHONY: help build clean test fmt lint vet check
+.PHONY: help build clean test fmt lint vet check tidy
 
 # Default target
 help: ## Show this help message
@@ -19,7 +19,7 @@ clean: ## Remove build artifacts
 # Format code
 fmt: ## Format Go code using gofmt
 	@echo "Formatting code..."
-	@go fmt ./...
+	@gofmt -s -w .
 
 # Lint code
 lint: ## Run linter (requires golangci-lint)
@@ -38,14 +38,19 @@ vet: ## Run go vet for correctness checks
 	@go vet ./...
 
 # Run tests
-test: ## Run tests
+test: ## Run tests with race detection
 	@echo "Running tests..."
-	@go test -v ./...
+	@go test -race -v ./...
+
+# Tidy dependencies
+tidy: ## Sync go.mod and go.sum
+	@echo "Tidying dependencies..."
+	@go mod tidy
 
 # Quality checks
 check: fmt vet ## Run formatting and correctness checks
 	@echo "All checks passed!"
 
 # Development workflow
-dev: clean fmt vet build ## Full development workflow: clean, format, check, build
+dev: clean tidy fmt vet build ## Full development workflow: clean, tidy, format, check, build
 	@echo "Development build complete!"
