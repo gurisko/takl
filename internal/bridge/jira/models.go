@@ -234,3 +234,35 @@ type jiraProjectStatusesResponse struct {
 		} `json:"statusCategory"`
 	} `json:"statuses"`
 }
+
+// jiraTransitionsResponse represents the response from GET /rest/api/3/issue/{issueKey}/transitions
+//
+// Example response:
+//
+//	{
+//	  "transitions": [{
+//	    "id": "11",
+//	    "name": "To Do",
+//	    "to": {
+//	      "id": "10000",
+//	      "name": "To Do"
+//	    }
+//	  }, {
+//	    "id": "21",
+//	    "name": "In Progress",
+//	    "to": {
+//	      "id": "10001",
+//	      "name": "In Progress"
+//	    }
+//	  }]
+//	}
+type jiraTransitionsResponse struct {
+	Transitions []struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+		To   struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"to"`
+	} `json:"transitions"`
+}

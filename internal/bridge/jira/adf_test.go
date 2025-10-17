@@ -2316,6 +2316,237 @@ This is important information
 	}
 }
 
+// TestADFToMarkdown_TaskList tests task list (checkbox) conversion from ADF
+func TestADFToMarkdown_TaskList(t *testing.T) {
+	adf := `{
+		"type": "doc",
+		"version": 1,
+		"content": [
+			{
+				"type": "taskList",
+				"attrs": {
+					"localId": "tasklist-1"
+				},
+				"content": [
+					{
+						"type": "taskItem",
+						"attrs": {
+							"localId": "task-1",
+							"state": "TODO"
+						},
+						"content": [
+							{
+								"type": "paragraph",
+								"content": [
+									{
+										"type": "text",
+										"text": "Unchecked task"
+									}
+								]
+							}
+						]
+					},
+					{
+						"type": "taskItem",
+						"attrs": {
+							"localId": "task-2",
+							"state": "DONE"
+						},
+						"content": [
+							{
+								"type": "paragraph",
+								"content": [
+									{
+										"type": "text",
+										"text": "Checked task"
+									}
+								]
+							}
+						]
+					}
+				]
+			}
+		]
+	}`
+
+	result, err := ADFToMarkdown(json.RawMessage(adf))
+	if err != nil {
+		t.Fatalf("ADFToMarkdown failed: %v", err)
+	}
+
+	expected := "- [ ] Unchecked task\n- [x] Checked task"
+	if result != expected {
+		t.Errorf("Expected %q, got %q", expected, result)
+	}
+}
+
+// TestMarkdownToADF_TaskList tests task list (checkbox) conversion to ADF
+func TestMarkdownToADF_TaskList(t *testing.T) {
+	markdown := `- [ ] Unchecked task
+- [x] Checked task
+- [ ] Another unchecked`
+
+	result, err := MarkdownToADF(markdown)
+	if err != nil {
+		t.Fatalf("MarkdownToADF failed: %v", err)
+	}
+
+	var doc ADFDocument
+	if err := json.Unmarshal(result, &doc); err != nil {
+		t.Fatalf("Failed to unmarshal result: %v", err)
+	}
+
+	if len(doc.Content) != 1 || doc.Content[0].Type != "taskList" {
+		t.Fatalf("Expected taskList, got %+v", doc.Content[0])
+	}
+
+	items := doc.Content[0].Content
+	if len(items) != 3 {
+		t.Fatalf("Expected 3 task items, got %d", len(items))
+	}
+
+	// Check first item is unchecked (TODO)
+	if items[0].Type != "taskItem" {
+		t.Errorf("Expected taskItem, got %s", items[0].Type)
+	}
+	if state, ok := items[0].Attrs["state"].(string); !ok || state != "TODO" {
+		t.Errorf("Expected state 'TODO', got %v", items[0].Attrs["state"])
+	}
+
+	// Check second item is checked (DONE)
+	if state, ok := items[1].Attrs["state"].(string); !ok || state != "DONE" {
+		t.Errorf("Expected state 'DONE', got %v", items[1].Attrs["state"])
+	}
+
+	// Check third item is unchecked (TODO)
+	if state, ok := items[2].Attrs["state"].(string); !ok || state != "TODO" {
+		t.Errorf("Expected state 'TODO', got %v", items[2].Attrs["state"])
+	}
+}
+
+// TestRoundTrip_TaskList tests round-trip conversion of task lists
+func TestRoundTrip_TaskList(t *testing.T) {
+	tests := []struct {
+		name     string
+		markdown string
+	}{
+		{
+			name: "simple task list",
+			markdown: `- [ ] Unchecked
+- [x] Checked
+- [ ] Another`,
+		},
+		{
+			name: "task list with formatting",
+			markdown: `- [ ] Task with **bold** text
+- [x] Task with *italic* text
+- [ ] Task with \` + "`code`",
+		},
+		{
+			name:     "single unchecked task",
+			markdown: "- [ ] Single task",
+		},
+		{
+			name:     "single checked task",
+			markdown: "- [x] Completed task",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Markdown → ADF
+			adf, err := MarkdownToADF(tt.markdown)
+			if err != nil {
+				t.Fatalf("MarkdownToADF failed: %v", err)
+			}
+
+			// ADF → Markdown
+			result, err := ADFToMarkdown(adf)
+			if err != nil {
+				t.Fatalf("ADFToMarkdown failed: %v", err)
+			}
+
+			if strings.TrimSpace(result) != strings.TrimSpace(tt.markdown) {
+				t.Errorf("Round-trip failed:\nExpected:\n%s\n\nGot:\n%s", tt.markdown, result)
+			}
+		})
+	}
+}
+
+// TestMarkdownToADF_NestedTaskList tests nested task lists
+func TestMarkdownToADF_NestedTaskList(t *testing.T) {
+	markdown := `- [ ] Parent task
+  - [ ] Nested task 1
+  - [x] Nested task 2
+- [x] Another parent`
+
+	result, err := MarkdownToADF(markdown)
+	if err != nil {
+		t.Fatalf("MarkdownToADF failed: %v", err)
+	}
+
+	var doc ADFDocument
+	if err := json.Unmarshal(result, &doc); err != nil {
+		t.Fatalf("Failed to unmarshal result: %v", err)
+	}
+
+	if len(doc.Content) != 1 || doc.Content[0].Type != "taskList" {
+		t.Fatalf("Expected taskList, got %+v", doc.Content[0])
+	}
+
+	items := doc.Content[0].Content
+	if len(items) != 2 {
+		t.Fatalf("Expected 2 parent items, got %d", len(items))
+	}
+
+	// Check first parent has nested task list
+	firstItem := items[0]
+	if len(firstItem.Content) < 2 {
+		t.Fatalf("Expected first item to have paragraph and nested list, got %d content nodes", len(firstItem.Content))
+	}
+
+	nestedList := firstItem.Content[1]
+	if nestedList.Type != "taskList" {
+		t.Errorf("Expected nested taskList, got %s", nestedList.Type)
+	}
+
+	if len(nestedList.Content) != 2 {
+		t.Errorf("Expected 2 nested tasks, got %d", len(nestedList.Content))
+	}
+}
+
+// TestMarkdownToADF_SeparateListsWithTasks tests separate regular and task lists
+func TestMarkdownToADF_SeparateListsWithTasks(t *testing.T) {
+	markdown := `- Regular item
+- Another regular item
+
+- [ ] Task item
+- [x] Another task`
+
+	result, err := MarkdownToADF(markdown)
+	if err != nil {
+		t.Fatalf("MarkdownToADF failed: %v", err)
+	}
+
+	var doc ADFDocument
+	if err := json.Unmarshal(result, &doc); err != nil {
+		t.Fatalf("Failed to unmarshal result: %v", err)
+	}
+
+	// Should have two separate lists: bulletList and taskList
+	if len(doc.Content) != 2 {
+		t.Fatalf("Expected 2 lists, got %d", len(doc.Content))
+	}
+
+	if doc.Content[0].Type != "bulletList" {
+		t.Errorf("Expected first list to be bulletList, got %s", doc.Content[0].Type)
+	}
+
+	if doc.Content[1].Type != "taskList" {
+		t.Errorf("Expected second list to be taskList, got %s", doc.Content[1].Type)
+	}
+}
+
 // TestMarkdownToADF_Expand tests expand/details conversion
 func TestMarkdownToADF_Expand(t *testing.T) {
 	markdown := `<details>

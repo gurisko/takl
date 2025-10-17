@@ -314,3 +314,176 @@ func (c *Client) FetchProjectStatuses(ctx context.Context, projectKey string) ([
 	log.Printf("[DEBUG] FetchProjectStatuses: Complete - fetched %d unique statuses for project %s", len(statuses), projectKey)
 	return statuses, nil
 }
+
+// GetIssue fetches a single issue by key from Jira
+// Used for conflict detection when pushing changes
+func (c *Client) GetIssue(ctx context.Context, issueKey string, cache *MemberCache) (*Issue, error) {
+	// URL-escape issue key for safety
+	escapedKey := url.QueryEscape(issueKey)
+	path := fmt.Sprintf("/rest/api/3/issue/%s?fields=summary,description,status,assignee,reporter,created,updated,labels,comment,attachment", escapedKey)
+
+	log.Printf("[DEBUG] GetIssue: Fetching issue %s", issueKey)
+
+	resp, err := c.doRequest(ctx, "GET", path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch issue: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var jiraIssue jiraIssueResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, MaxSearchResponseSize)).Decode(&jiraIssue); err != nil {
+		return nil, fmt.Errorf("failed to decode issue response: %w", err)
+	}
+
+	issue := convertJiraIssue(jiraIssue, cache)
+	log.Printf("[DEBUG] GetIssue: Successfully fetched issue %s", issueKey)
+	return &issue, nil
+}
+
+// UpdateIssue updates an issue's fields in Jira
+// Supports updating: summary (title), description, and labels
+// Note: description should be provided as markdown and will be converted to ADF
+func (c *Client) UpdateIssue(ctx context.Context, issueKey string, updates map[string]interface{}) error {
+	// URL-escape issue key for safety
+	escapedKey := url.QueryEscape(issueKey)
+	path := fmt.Sprintf("/rest/api/3/issue/%s", escapedKey)
+
+	// Convert description from markdown to ADF if present
+	if desc, ok := updates["description"].(string); ok {
+		adf, err := MarkdownToADF(desc)
+		if err != nil {
+			return fmt.Errorf("failed to convert description to ADF: %w", err)
+		}
+		// Unmarshal the ADF JSON into a map so it serializes correctly
+		var adfDoc map[string]interface{}
+		if err := json.Unmarshal(adf, &adfDoc); err != nil {
+			return fmt.Errorf("failed to unmarshal ADF: %w", err)
+		}
+		updates["description"] = adfDoc
+	}
+
+	// Wrap updates in "fields" object as required by Jira API
+	body := map[string]interface{}{
+		"fields": updates,
+	}
+
+	log.Printf("[DEBUG] UpdateIssue: Updating issue %s", issueKey)
+
+	resp, err := c.doRequest(ctx, "PUT", path, body)
+	if err != nil {
+		return fmt.Errorf("failed to update issue: %w", err)
+	}
+	defer resp.Body.Close()
+
+	log.Printf("[DEBUG] UpdateIssue: Successfully updated issue %s", issueKey)
+	return nil
+}
+
+// AddComment adds a comment to an issue in Jira
+// The comment body should be in markdown format (will be converted to ADF)
+func (c *Client) AddComment(ctx context.Context, issueKey string, commentBody string) error {
+	// URL-escape issue key for safety
+	escapedKey := url.QueryEscape(issueKey)
+	path := fmt.Sprintf("/rest/api/3/issue/%s/comment", escapedKey)
+
+	// Convert markdown to ADF for Jira API
+	adf, err := MarkdownToADF(commentBody)
+	if err != nil {
+		return fmt.Errorf("failed to convert comment to ADF: %w", err)
+	}
+
+	// Unmarshal the ADF JSON into a map so it serializes correctly
+	var adfDoc map[string]interface{}
+	if err := json.Unmarshal(adf, &adfDoc); err != nil {
+		return fmt.Errorf("failed to unmarshal ADF: %w", err)
+	}
+
+	body := map[string]interface{}{
+		"body": adfDoc,
+	}
+
+	log.Printf("[DEBUG] AddComment: Adding comment to issue %s", issueKey)
+
+	resp, err := c.doRequest(ctx, "POST", path, body)
+	if err != nil {
+		return fmt.Errorf("failed to add comment: %w", err)
+	}
+	defer resp.Body.Close()
+
+	log.Printf("[DEBUG] AddComment: Successfully added comment to issue %s", issueKey)
+	return nil
+}
+
+// GetTransitions fetches available workflow transitions for an issue
+func (c *Client) GetTransitions(ctx context.Context, issueKey string) ([]struct {
+	ID         string
+	Name       string
+	ToStatus   string
+	ToStatusID string
+}, error) {
+	// URL-escape issue key for safety
+	escapedKey := url.QueryEscape(issueKey)
+	path := fmt.Sprintf("/rest/api/3/issue/%s/transitions", escapedKey)
+
+	log.Printf("[DEBUG] GetTransitions: Fetching transitions for issue %s", issueKey)
+
+	resp, err := c.doRequest(ctx, "GET", path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch transitions: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var transitionsResp jiraTransitionsResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, MaxSearchResponseSize)).Decode(&transitionsResp); err != nil {
+		return nil, fmt.Errorf("failed to decode transitions response: %w", err)
+	}
+
+	// Convert to simpler format
+	transitions := make([]struct {
+		ID         string
+		Name       string
+		ToStatus   string
+		ToStatusID string
+	}, 0, len(transitionsResp.Transitions))
+
+	for _, t := range transitionsResp.Transitions {
+		transitions = append(transitions, struct {
+			ID         string
+			Name       string
+			ToStatus   string
+			ToStatusID string
+		}{
+			ID:         t.ID,
+			Name:       t.Name,
+			ToStatus:   t.To.Name,
+			ToStatusID: t.To.ID,
+		})
+	}
+
+	log.Printf("[DEBUG] GetTransitions: Found %d transitions for issue %s", len(transitions), issueKey)
+	return transitions, nil
+}
+
+// TransitionIssue performs a workflow transition on an issue
+func (c *Client) TransitionIssue(ctx context.Context, issueKey string, transitionID string) error {
+	// URL-escape issue key for safety
+	escapedKey := url.QueryEscape(issueKey)
+	path := fmt.Sprintf("/rest/api/3/issue/%s/transitions", escapedKey)
+
+	body := map[string]interface{}{
+		"transition": map[string]string{
+			"id": transitionID,
+		},
+	}
+
+	log.Printf("[DEBUG] TransitionIssue: Transitioning issue %s with transition ID %s", issueKey, transitionID)
+
+	resp, err := c.doRequest(ctx, "POST", path, body)
+	if err != nil {
+		return fmt.Errorf("failed to transition issue: %w", err)
+	}
+	defer resp.Body.Close()
+
+	log.Printf("[DEBUG] TransitionIssue: Successfully transitioned issue %s", issueKey)
+	return nil
+}

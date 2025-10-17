@@ -34,6 +34,19 @@ The Jira configuration should be in .takl/jira.json with the following format:
 	RunE: runJiraPull,
 }
 
+var jiraPushCmd = &cobra.Command{
+	Use:   "push [issue-key]",
+	Short: "Push local changes to Jira",
+	Long: `Upload modified issues to Jira.
+
+Only issues with local changes will be pushed. If any issue has been modified
+remotely since the last pull, push will fail with a conflict error.
+
+If an issue key is provided (e.g., PROJ-123), only that issue will be pushed.
+Otherwise, all changed issues will be pushed.`,
+	RunE: runJiraPush,
+}
+
 var jiraMembersCmd = &cobra.Command{
 	Use:   "members",
 	Short: "Fetch and cache project members",
@@ -60,6 +73,7 @@ var workflowJSONOutput bool
 func init() {
 	rootCmd.AddCommand(jiraCmd)
 	jiraCmd.AddCommand(jiraPullCmd)
+	jiraCmd.AddCommand(jiraPushCmd)
 	jiraCmd.AddCommand(jiraMembersCmd)
 	jiraCmd.AddCommand(jiraWorkflowCmd)
 
@@ -96,6 +110,60 @@ func runJiraPull(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Fetched: %d issues\n", result.Fetched)
 	fmt.Printf("  Created: %d new issues\n", result.Created)
 	fmt.Printf("  Updated: %d existing issues\n", result.Updated)
+
+	if len(result.Errors) > 0 {
+		fmt.Printf("\nErrors:\n")
+		for _, err := range result.Errors {
+			fmt.Printf("  - %v\n", err)
+		}
+	}
+
+	return nil
+}
+
+func runJiraPush(cmd *cobra.Command, args []string) error {
+	config, projectPath, err := jira.LoadConfigFromCwd()
+	if err != nil {
+		return err
+	}
+
+	// Create API client
+	client := apiclient.New()
+
+	// Prepare request
+	reqBody := map[string]interface{}{
+		"project_path": projectPath,
+		"config":       config,
+	}
+
+	// Add optional issue key filter
+	if len(args) > 0 {
+		reqBody["issue_key"] = args[0]
+	}
+
+	// Make API call to daemon
+	var result jira.PushResult
+	if err := client.PostJSON(cmd.Context(), "/api/jira/push", reqBody, &result); err != nil {
+		// Check if it's a conflict error
+		if apiErr, ok := err.(*apiclient.APIError); ok && apiErr.StatusCode == 409 {
+			// Display conflict information
+			fmt.Printf("Error: Cannot push - %d issue(s) have conflicts:\n", len(result.Conflicts))
+			for _, conflict := range result.Conflicts {
+				fmt.Printf("  - %s: Remote modified (last updated: %s)\n",
+					conflict.IssueKey,
+					conflict.Updated.Format("2006-01-02 15:04"))
+			}
+			fmt.Printf("\nRun 'takl jira pull' to fetch remote changes, then push again.\n")
+			return fmt.Errorf("push failed due to conflicts")
+		}
+		return fmt.Errorf("push request failed: %w", err)
+	}
+
+	// Display results
+	fmt.Printf("Jira Push Complete\n")
+	fmt.Printf("  Scanned: %d issues\n", result.Scanned)
+	fmt.Printf("  Pushed: %d issues\n", result.Pushed)
+	fmt.Printf("  Skipped: %d issues (no changes)\n", result.Skipped)
 
 	if len(result.Errors) > 0 {
 		fmt.Printf("\nErrors:\n")

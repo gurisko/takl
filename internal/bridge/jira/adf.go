@@ -44,9 +44,12 @@ var (
 	// Group 1: leading whitespace, Group 2: item text
 	reUnorderedListItem = regexp.MustCompile(`^(\s*)[-*+]\s+(.+)$`)
 
-	// reTaskListItem matches task list items with checkboxes (- [ ] or - [x])
+	// reTaskListItem matches checkbox list items (- [ ] or - [x])
 	// Group 1: leading whitespace, Group 2: checkbox state (space or x), Group 3: item text
-	reTaskListItem = regexp.MustCompile(`^(\s*)-\s+\[([ xX])\]\s+(.+)$`)
+	reTaskListItem = regexp.MustCompile(`^(\s*)[-*+]\s+\[([ xX])\]\s+(.+)$`)
+
+	// reTaskListStart detects the start of a task list
+	reTaskListStart = regexp.MustCompile(`^\s*[-*+]\s+\[[ xX]\]\s+`)
 
 	// reOrderedListStart detects the start of an ordered sublist
 	reOrderedListStart = regexp.MustCompile(`^\s*\d+\.\s+`)
@@ -135,7 +138,10 @@ func nodeToMarkdown(node ADFNode, depth int) string {
 		return strings.TrimSuffix(listToMarkdown(node, depth, true), "\n")
 
 	case "taskList":
-		return taskListToMarkdown(node, depth)
+		return strings.TrimSuffix(taskListToMarkdown(node, depth), "\n")
+
+	case "taskItem":
+		return taskItemToMarkdown(node, depth)
 
 	case "listItem":
 		var content strings.Builder
@@ -263,38 +269,46 @@ func taskListToMarkdown(node ADFNode, depth int) string {
 	var md strings.Builder
 	indent := strings.Repeat("  ", depth)
 
-	for i, item := range node.Content {
-		if item.Type != "taskItem" {
-			continue
-		}
-
-		// Get checkbox state (TODO or DONE)
-		state := "TODO" // default
-		if item.Attrs != nil {
-			if s, ok := item.Attrs["state"].(string); ok {
-				state = s
-			}
-		}
-
-		// Convert to markdown checkbox
-		checkbox := "- [ ] " // unchecked
-		if state == "DONE" {
-			checkbox = "- [x] " // checked
-		}
-
-		md.WriteString(indent + checkbox)
-
-		// Process item content (usually a paragraph)
-		for _, child := range item.Content {
-			md.WriteString(nodeToMarkdown(child, depth))
-		}
-
-		if i < len(node.Content)-1 {
+	for _, item := range node.Content {
+		if item.Type == "taskItem" {
+			md.WriteString(indent)
+			md.WriteString(taskItemToMarkdown(item, depth))
 			md.WriteString("\n")
 		}
 	}
 
 	return md.String()
+}
+
+// taskItemToMarkdown converts a task item to Markdown checkbox format
+func taskItemToMarkdown(node ADFNode, depth int) string {
+	// Get checkbox state from attrs
+	checked := false
+	if node.Attrs != nil {
+		if state, ok := node.Attrs["state"].(string); ok {
+			checked = (state == "DONE")
+		}
+	}
+
+	// Format checkbox
+	checkbox := "- [ ] "
+	if checked {
+		checkbox = "- [x] "
+	}
+
+	// Get content
+	var content strings.Builder
+	for i, child := range node.Content {
+		if i > 0 {
+			// Add newline before nested lists (but not after paragraph)
+			if child.Type == "bulletList" || child.Type == "orderedList" || child.Type == "taskList" {
+				content.WriteString("\n")
+			}
+		}
+		content.WriteString(nodeToMarkdown(child, depth+1))
+	}
+
+	return checkbox + content.String()
 }
 
 // codeBlockToMarkdown converts a code block to Markdown
@@ -763,8 +777,8 @@ func MarkdownToADF(markdown string) (json.RawMessage, error) {
 			continue
 		}
 
-		// Task list (must check BEFORE unordered list since both start with -)
-		if reTaskListItem.MatchString(line) {
+		// Task list (checkbox list) - must check before regular unordered list
+		if reTaskListStart.MatchString(line) {
 			node, consumed := parseTaskList(lines, i)
 			doc.Content = append(doc.Content, node)
 			i += consumed
@@ -869,10 +883,8 @@ func parseBlockquote(lines []string, start int) (ADFNode, int) {
 // parseList parses an ordered or unordered list with support for nested lists
 func parseList(lines []string, start int, ordered bool) (ADFNode, int) {
 	listType := "bulletList"
-	attrs := map[string]interface{}{}
 	if ordered {
 		listType = "orderedList"
-		attrs["order"] = 1
 	}
 
 	var items []ADFNode
@@ -948,19 +960,20 @@ func parseList(lines []string, start int, ordered bool) (ADFNode, int) {
 		Type:    listType,
 		Content: items,
 	}
-	if len(attrs) > 0 {
-		node.Attrs = attrs
+
+	// Add order attribute for ordered lists
+	if ordered {
+		node.Attrs = map[string]interface{}{
+			"order": 1,
+		}
 	}
+
 	return node, i - start
 }
 
-// parseTaskList parses a task list (checkboxes) from Markdown
+// parseTaskList parses a task list (checkbox list) with support for nested lists
 func parseTaskList(lines []string, start int) (ADFNode, int) {
-	taskList := ADFNode{
-		Type:    "taskList",
-		Content: []ADFNode{},
-	}
-
+	var items []ADFNode
 	i := start
 	baseIndent := getIndent(lines[start])
 
@@ -973,46 +986,74 @@ func parseTaskList(lines []string, start int) (ADFNode, int) {
 			break
 		}
 
-		// Check if still a task list item
-		matches := reTaskListItem.FindStringSubmatch(line)
-		if matches == nil {
+		// Check if this is a task item at the current level
+		match := reTaskListItem.FindStringSubmatch(line)
+		if match == nil {
+			// Not a task item, might be continuation or end of list
 			break
 		}
 
 		if currentIndent == baseIndent {
-			// Same level task item
-			checkbox := matches[2]
-			itemText := matches[3]
-
-			// Determine state
+			// Same level task item - create it
+			checked := match[2] == "x" || match[2] == "X"
+			// Use Jira's standard state values: TODO (unchecked) and DONE (checked)
 			state := "TODO"
-			if checkbox == "x" || checkbox == "X" {
+			if checked {
 				state = "DONE"
 			}
 
-			// Create task item with paragraph content
 			taskItem := ADFNode{
 				Type: "taskItem",
-				Content: []ADFNode{
-					{
-						Type:    "paragraph",
-						Content: parseInlineContent(itemText),
-					},
-				},
 				Attrs: map[string]interface{}{
-					"state": state,
+					"state":   state,
+					"localId": fmt.Sprintf("task-%d", i),
 				},
+				Content: parseInlineContent(match[3]),
 			}
-
-			taskList.Content = append(taskList.Content, taskItem)
+			items = append(items, taskItem)
 			i++
-		} else {
-			// Different indentation level, stop here
+
+			// Check for nested lists
+			if i < len(lines) {
+				nextIndent := getIndent(lines[i])
+				if nextIndent > baseIndent {
+					// Detect if it's an ordered, unordered, or task sublist
+					isOrderedSublist := reOrderedListStart.MatchString(lines[i])
+					isUnorderedSublist := reUnorderedListStart.MatchString(lines[i])
+					isTaskSublist := reTaskListStart.MatchString(lines[i])
+
+					if isTaskSublist {
+						// Parse nested task list recursively
+						sublist, consumed := parseTaskList(lines, i)
+						i += consumed
+						if len(items) > 0 {
+							items[len(items)-1].Content = append(items[len(items)-1].Content, sublist)
+						}
+					} else if isOrderedSublist || isUnorderedSublist {
+						// Parse nested regular list recursively
+						sublist, consumed := parseList(lines, i, isOrderedSublist)
+						i += consumed
+						if len(items) > 0 {
+							items[len(items)-1].Content = append(items[len(items)-1].Content, sublist)
+						}
+					}
+				}
+			}
+		} else if currentIndent > baseIndent {
+			// This is a nested item but we're at the wrong level - break to let recursion handle it
 			break
+		} else {
+			i++
 		}
 	}
 
-	return taskList, i - start
+	return ADFNode{
+		Type: "taskList",
+		Attrs: map[string]interface{}{
+			"localId": fmt.Sprintf("tasklist-%d", start),
+		},
+		Content: items,
+	}, i - start
 }
 
 // parseParagraph parses a regular paragraph

@@ -18,6 +18,13 @@ type jiraPullRequest struct {
 	Config      jira.JiraConfig `json:"config"`
 }
 
+// jiraPushRequest is the JSON payload for push requests
+type jiraPushRequest struct {
+	ProjectPath string          `json:"project_path"`
+	Config      jira.JiraConfig `json:"config"`
+	IssueKey    string          `json:"issue_key,omitempty"` // Optional: push only this issue
+}
+
 // handleJiraPull handles POST /api/jira/pull
 func (d *Daemon) handleJiraPull(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -227,4 +234,74 @@ func sortStatuses(statuses []*jira.StatusInfo) {
 		// Third: sort by ID for stability (when name and category are equal)
 		return statuses[i].ID < statuses[j].ID
 	})
+}
+
+// handleJiraPush handles POST /api/jira/push
+func (d *Daemon) handleJiraPush(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req jiraPushRequest
+	dec := json.NewDecoder(io.LimitReader(r.Body, limits.JSON))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Validate request - all fields required
+	if req.ProjectPath == "" {
+		writeError(w, "project_path is required", http.StatusBadRequest)
+		return
+	}
+	if req.Config.BaseURL == "" {
+		writeError(w, "config.base_url is required", http.StatusBadRequest)
+		return
+	}
+	if req.Config.Email == "" {
+		writeError(w, "config.email is required", http.StatusBadRequest)
+		return
+	}
+	if req.Config.APIToken == "" {
+		writeError(w, "config.api_token is required", http.StatusBadRequest)
+		return
+	}
+	if req.Config.Project == "" {
+		writeError(w, "config.project is required", http.StatusBadRequest)
+		return
+	}
+
+	// Create Jira client
+	client := jira.NewClient(req.Config.BaseURL, req.Config.Email, req.Config.APIToken)
+
+	// Open storage (read-only check - issues directory must exist)
+	storage, err := jira.OpenStorage(req.ProjectPath)
+	if err != nil {
+		writeError(w, "failed to open storage: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Execute push
+	result, err := jira.Push(r.Context(), client, storage, &req.Config, req.IssueKey)
+	if err != nil {
+		// Check if it's a conflict error
+		if len(result.Conflicts) > 0 {
+			// Return 409 Conflict with result details
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(result)
+			return
+		}
+
+		// Other errors
+		writeError(w, "push failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Return result
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(result)
 }
