@@ -815,8 +815,10 @@ func parseBlockquote(lines []string, start int) (ADFNode, int) {
 // parseList parses an ordered or unordered list with support for nested lists
 func parseList(lines []string, start int, ordered bool) (ADFNode, int) {
 	listType := "bulletList"
+	attrs := map[string]interface{}{}
 	if ordered {
 		listType = "orderedList"
+		attrs["order"] = 1
 	}
 
 	var items []ADFNode
@@ -888,10 +890,14 @@ func parseList(lines []string, start int, ordered bool) (ADFNode, int) {
 		}
 	}
 
-	return ADFNode{
+	node := ADFNode{
 		Type:    listType,
 		Content: items,
-	}, i - start
+	}
+	if len(attrs) > 0 {
+		node.Attrs = attrs
+	}
+	return node, i - start
 }
 
 // parseParagraph parses a regular paragraph
