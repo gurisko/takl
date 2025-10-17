@@ -22,7 +22,7 @@ type listResp struct {
 	} `json:"projects"`
 }
 
-var listJSON bool
+var projectsListJSON bool
 
 var projectsListCmd = &cobra.Command{
 	Use:   "list",
@@ -33,7 +33,7 @@ var projectsListCmd = &cobra.Command{
 		if err := c.GetJSON(cmd.Context(), "/api/projects", &out); err != nil {
 			return err
 		}
-		if listJSON {
+		if projectsListJSON {
 			enc := json.NewEncoder(os.Stdout)
 			enc.SetIndent("", "  ")
 			return enc.Encode(out)
@@ -53,5 +53,5 @@ var projectsListCmd = &cobra.Command{
 
 func init() {
 	projectsCmd.AddCommand(projectsListCmd)
-	projectsListCmd.Flags().BoolVar(&listJSON, "json", false, "print JSON")
+	projectsListCmd.Flags().BoolVar(&projectsListJSON, "json", false, "print JSON")
 }

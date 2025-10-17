@@ -34,7 +34,7 @@ var (
 	listAssignee string
 	listLabels   []string
 	listSearch   string
-	listPipe     bool
+	listJSON     bool
 )
 
 var listCmd = &cobra.Command{
@@ -48,7 +48,7 @@ Examples:
   takl list --assignee "John Doe"        # Filter by assignee display name
   takl list --labels bug,urgent          # Filter by labels (must match all)
   takl list --search "database error"    # Search in title and description
-  takl list --pipe                       # Output JSON for piping`,
+  takl list --json                       # Output JSON for piping`,
 	RunE: runList,
 }
 
@@ -58,7 +58,7 @@ func init() {
 	listCmd.Flags().StringVar(&listAssignee, "assignee", "", "filter by assignee display name")
 	listCmd.Flags().StringSliceVar(&listLabels, "labels", nil, "filter by labels (comma-separated)")
 	listCmd.Flags().StringVar(&listSearch, "search", "", "search in title and description")
-	listCmd.Flags().BoolVar(&listPipe, "pipe", false, "output JSON (same as pipe command)")
+	listCmd.Flags().BoolVar(&listJSON, "json", false, "output JSON")
 }
 
 func runList(cmd *cobra.Command, args []string) error {
@@ -96,8 +96,8 @@ func runList(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Output JSON if pipe mode
-	if listPipe {
+	// Output JSON if requested
+	if listJSON {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(resp)
