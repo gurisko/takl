@@ -44,6 +44,10 @@ var (
 	// Group 1: leading whitespace, Group 2: item text
 	reUnorderedListItem = regexp.MustCompile(`^(\s*)[-*+]\s+(.+)$`)
 
+	// reTaskListItem matches task list items with checkboxes (- [ ] or - [x])
+	// Group 1: leading whitespace, Group 2: checkbox state (space or x), Group 3: item text
+	reTaskListItem = regexp.MustCompile(`^(\s*)-\s+\[([ xX])\]\s+(.+)$`)
+
 	// reOrderedListStart detects the start of an ordered sublist
 	reOrderedListStart = regexp.MustCompile(`^\s*\d+\.\s+`)
 
@@ -129,6 +133,9 @@ func nodeToMarkdown(node ADFNode, depth int) string {
 
 	case "orderedList":
 		return strings.TrimSuffix(listToMarkdown(node, depth, true), "\n")
+
+	case "taskList":
+		return taskListToMarkdown(node, depth)
 
 	case "listItem":
 		var content strings.Builder
@@ -244,6 +251,45 @@ func listToMarkdown(node ADFNode, depth int, ordered bool) string {
 
 			md.WriteString(indent + prefix)
 			md.WriteString(nodeToMarkdown(item, depth))
+			md.WriteString("\n")
+		}
+	}
+
+	return md.String()
+}
+
+// taskListToMarkdown converts a task list (checkboxes) to Markdown
+func taskListToMarkdown(node ADFNode, depth int) string {
+	var md strings.Builder
+	indent := strings.Repeat("  ", depth)
+
+	for i, item := range node.Content {
+		if item.Type != "taskItem" {
+			continue
+		}
+
+		// Get checkbox state (TODO or DONE)
+		state := "TODO" // default
+		if item.Attrs != nil {
+			if s, ok := item.Attrs["state"].(string); ok {
+				state = s
+			}
+		}
+
+		// Convert to markdown checkbox
+		checkbox := "- [ ] " // unchecked
+		if state == "DONE" {
+			checkbox = "- [x] " // checked
+		}
+
+		md.WriteString(indent + checkbox)
+
+		// Process item content (usually a paragraph)
+		for _, child := range item.Content {
+			md.WriteString(nodeToMarkdown(child, depth))
+		}
+
+		if i < len(node.Content)-1 {
 			md.WriteString("\n")
 		}
 	}
@@ -717,6 +763,14 @@ func MarkdownToADF(markdown string) (json.RawMessage, error) {
 			continue
 		}
 
+		// Task list (must check BEFORE unordered list since both start with -)
+		if reTaskListItem.MatchString(line) {
+			node, consumed := parseTaskList(lines, i)
+			doc.Content = append(doc.Content, node)
+			i += consumed
+			continue
+		}
+
 		// Unordered list
 		if reUnorderedListStart.MatchString(line) {
 			node, consumed := parseList(lines, i, false)
@@ -898,6 +952,67 @@ func parseList(lines []string, start int, ordered bool) (ADFNode, int) {
 		node.Attrs = attrs
 	}
 	return node, i - start
+}
+
+// parseTaskList parses a task list (checkboxes) from Markdown
+func parseTaskList(lines []string, start int) (ADFNode, int) {
+	taskList := ADFNode{
+		Type:    "taskList",
+		Content: []ADFNode{},
+	}
+
+	i := start
+	baseIndent := getIndent(lines[start])
+
+	for i < len(lines) {
+		line := lines[i]
+		currentIndent := getIndent(line)
+
+		// Stop if we hit a line with less indent
+		if currentIndent < baseIndent {
+			break
+		}
+
+		// Check if still a task list item
+		matches := reTaskListItem.FindStringSubmatch(line)
+		if matches == nil {
+			break
+		}
+
+		if currentIndent == baseIndent {
+			// Same level task item
+			checkbox := matches[2]
+			itemText := matches[3]
+
+			// Determine state
+			state := "TODO"
+			if checkbox == "x" || checkbox == "X" {
+				state = "DONE"
+			}
+
+			// Create task item with paragraph content
+			taskItem := ADFNode{
+				Type: "taskItem",
+				Content: []ADFNode{
+					{
+						Type:    "paragraph",
+						Content: parseInlineContent(itemText),
+					},
+				},
+				Attrs: map[string]interface{}{
+					"state": state,
+				},
+			}
+
+			taskList.Content = append(taskList.Content, taskItem)
+			i++
+		} else {
+			// Different indentation level, stop here
+			break
+		}
+	}
+
+	return taskList, i - start
 }
 
 // parseParagraph parses a regular paragraph
