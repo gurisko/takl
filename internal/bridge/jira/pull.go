@@ -11,6 +11,7 @@ type PullResult struct {
 	Fetched int      `json:"fetched"`
 	Created int      `json:"created"`
 	Updated int      `json:"updated"`
+	Deleted int      `json:"deleted"`
 	Errors  []string `json:"errors"`
 }
 
@@ -102,7 +103,7 @@ func Pull(ctx context.Context, client *Client, storage *Storage, config *JiraCon
 	// Fetch and cache project workflow/statuses (non-fatal)
 	_, _ = RefreshWorkflowCache(ctx, client, storage.projectPath, config.Project)
 
-	// Search for all issues in the project
+	// Search for all issues in the project (archived filtering handled client-side)
 	jql := fmt.Sprintf("project=%s ORDER BY updated DESC", config.Project)
 	log.Printf("[DEBUG] Pull: Searching Jira with JQL: %s", jql)
 	issues, err := client.SearchIssues(ctx, jql, MaxSearchResults, memberCache)
@@ -122,6 +123,29 @@ func Pull(ctx context.Context, client *Client, storage *Storage, config *JiraCon
 	localMap := make(map[string]bool)
 	for _, key := range localIssues {
 		localMap[key] = true
+	}
+
+	// Build set of fetched issue keys for efficient lookup
+	fetchedKeys := make(map[string]bool)
+	for _, issue := range issues {
+		fetchedKeys[issue.JiraKey] = true
+	}
+
+	// Delete local issues that are no longer in Jira (archived or deleted)
+	for _, localKey := range localIssues {
+		if !fetchedKeys[localKey] {
+			log.Printf("[DEBUG] Pull: Deleting locally archived/removed issue %s", localKey)
+			if err := storage.DeleteIssue(localKey); err != nil {
+				log.Printf("[ERROR] Pull: Failed to delete %s: %v", localKey, err)
+				result.Errors = append(result.Errors, fmt.Sprintf("failed to delete %s: %v", localKey, err))
+			} else {
+				result.Deleted++
+			}
+		}
+	}
+
+	if result.Deleted > 0 {
+		log.Printf("[DEBUG] Pull: Deleted %d locally archived/removed issues", result.Deleted)
 	}
 
 	// Process each issue
@@ -154,7 +178,7 @@ func Pull(ctx context.Context, client *Client, storage *Storage, config *JiraCon
 		}
 	}
 
-	log.Printf("[DEBUG] Pull: Complete - Created: %d, Updated: %d, Errors: %d", result.Created, result.Updated, len(result.Errors))
+	log.Printf("[DEBUG] Pull: Complete - Created: %d, Updated: %d, Deleted: %d, Errors: %d", result.Created, result.Updated, result.Deleted, len(result.Errors))
 
 	// Return error if all issues failed to save
 	if len(result.Errors) > 0 && result.Created == 0 && result.Updated == 0 {

@@ -110,6 +110,9 @@ func runJiraPull(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Fetched: %d issues\n", result.Fetched)
 	fmt.Printf("  Created: %d new issues\n", result.Created)
 	fmt.Printf("  Updated: %d existing issues\n", result.Updated)
+	if result.Deleted > 0 {
+		fmt.Printf("  Deleted: %d archived/removed issues\n", result.Deleted)
+	}
 
 	if len(result.Errors) > 0 {
 		fmt.Printf("\nErrors:\n")

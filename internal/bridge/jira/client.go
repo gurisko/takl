@@ -122,8 +122,13 @@ func (c *Client) SearchIssues(ctx context.Context, jql string, maxResults int, c
 		log.Printf("[DEBUG] SearchIssues: Page %d returned %d issues (total so far: %d, nextToken: %s)",
 			pageNum, len(searchResp.Issues), len(allIssues)+len(searchResp.Issues), nextTokenDisplay)
 
-		// Convert and append issues
+		// Convert and append issues (skip archived ones)
 		for _, jiraIssue := range searchResp.Issues {
+			// Skip archived issues
+			if jiraIssue.Archived {
+				log.Printf("[DEBUG] SearchIssues: Skipping archived issue %s", jiraIssue.Key)
+				continue
+			}
 			allIssues = append(allIssues, convertJiraIssue(jiraIssue, cache))
 		}
 

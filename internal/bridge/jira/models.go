@@ -60,9 +60,10 @@ import (
 //
 // Note: description can be null or ADF object (as shown)
 type jiraIssueResponse struct {
-	ID     string `json:"id"`
-	Key    string `json:"key"`
-	Fields struct {
+	ID       string `json:"id"`
+	Key      string `json:"key"`
+	Archived bool   `json:"archived,omitempty"`
+	Fields   struct {
 		Summary string `json:"summary"`
 		// API v3 uses ADF (Atlassian Document Format) for rich text
 		Description json.RawMessage `json:"description"`

@@ -124,6 +124,18 @@ func (s *Storage) ListIssues() ([]string, error) {
 	return keys, nil
 }
 
+// DeleteIssue deletes an issue file from local storage
+func (s *Storage) DeleteIssue(key string) error {
+	filePath := filepath.Join(s.issuesDir, key+".md")
+	if err := os.Remove(filePath); err != nil {
+		if os.IsNotExist(err) {
+			return nil // Already deleted, not an error
+		}
+		return fmt.Errorf("failed to delete issue %s: %w", key, err)
+	}
+	return nil
+}
+
 // ReadIssue reads a single issue from disk
 func (s *Storage) ReadIssue(key string) (*Issue, error) {
 	filePath := filepath.Join(s.issuesDir, key+".md")
