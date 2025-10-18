@@ -485,7 +485,8 @@ func (s *Storage) issueToMarkdown(issue *Issue) string {
 	}
 
 	if len(issue.Labels) > 0 {
-		frontmatter["labels"] = issue.Labels
+		// Sort labels for stable output and reduced diff noise
+		frontmatter["labels"] = normalizeLabels(issue.Labels)
 	}
 
 	yamlData, err := yaml.Marshal(frontmatter)
@@ -534,6 +535,18 @@ func (s *Storage) issueToMarkdown(issue *Issue) string {
 	return buf.String()
 }
 
+// normalizeLabels returns a sorted copy of the labels slice.
+// This ensures consistent ordering for storage, API updates, and hashing.
+func normalizeLabels(labels []string) []string {
+	if len(labels) == 0 {
+		return labels
+	}
+	normalized := make([]string, len(labels))
+	copy(normalized, labels)
+	sort.Strings(normalized)
+	return normalized
+}
+
 // ComputeHash calculates SHA256 hash of issue content for conflict detection.
 //
 // Included fields: JiraKey, Title, Description, Status, Labels, Comments
@@ -557,10 +570,7 @@ func (s *Storage) ComputeHash(issue *Issue) string {
 	buf.WriteString("|")
 
 	// Sort labels for consistent hashing
-	labels := make([]string, len(issue.Labels))
-	copy(labels, issue.Labels)
-	sort.Strings(labels)
-	buf.WriteString(strings.Join(labels, ","))
+	buf.WriteString(strings.Join(normalizeLabels(issue.Labels), ","))
 	buf.WriteString("|")
 
 	// Include comments

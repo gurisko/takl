@@ -146,10 +146,11 @@ func pushIssue(ctx context.Context, client *Client, storage *Storage, local *Iss
 		hasUpdates = true
 	}
 
-	// Check labels
-	if !equalStringSlices(local.Labels, remote.Labels) {
+	// Check labels (order-insensitive comparison to avoid churn from Jira reordering)
+	if !equalStringSlicesIgnoreOrder(local.Labels, remote.Labels) {
 		log.Printf("[DEBUG] pushIssue: Labels changed for %s", local.JiraKey)
-		updates["labels"] = local.Labels
+		// Normalize label order for stability
+		updates["labels"] = normalizeLabels(local.Labels)
 		hasUpdates = true
 	}
 
@@ -261,6 +262,24 @@ func equalStringSlices(a, b []string) bool {
 		if a[i] != b[i] {
 			return false
 		}
+	}
+	return true
+}
+
+// equalStringSlicesIgnoreOrder compares two string slices as multisets (order-insensitive)
+func equalStringSlicesIgnoreOrder(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	m := make(map[string]int, len(a))
+	for _, s := range a {
+		m[s]++
+	}
+	for _, s := range b {
+		if m[s] == 0 {
+			return false
+		}
+		m[s]--
 	}
 	return true
 }
