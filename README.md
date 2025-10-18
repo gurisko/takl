@@ -56,16 +56,16 @@ takl list --status "In Progress"       # Filter by status
 takl list --assignee "John"            # Filter by assignee (name or email substring)
 takl list --labels bug,urgent          # Filter by labels (must match all)
 takl list --search "database error"    # Search in title and description
-takl list --pipe                       # Output JSON for piping
+takl list --json                       # Output JSON for piping
 
 # Show issue details
 takl show PROJ-123                     # Display full issue details
 takl show PROJ-456 --json              # Output as JSON
 
-# Pipe issues as JSON (for Unix pipeline composition)
-takl pipe                              # All issues as JSON
-takl pipe --status Open | jq '.count'  # Count open issues
-takl pipe | jq '.issues[] | select(.status=="Done")'  # Filter with jq
+# Unix pipeline composition (using --json flag)
+takl list --json | jq -r '.issues[] | "\(.jira_key): \(.title)"'
+takl list --status Open --json | jq '.count'
+takl list --labels bug --json | jq '.issues[].jira_key'
 ```
 
 **Note:** The `--assignee` filter supports case-insensitive substring matching on both display names and email addresses.
